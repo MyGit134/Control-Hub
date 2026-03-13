@@ -1,0 +1,43 @@
+﻿# Remote services bundle (run this on each managed machine)
+
+version: "3.9"
+
+services:
+  desktop:
+    image: lscr.io/linuxserver/webtop:latest
+    container_name: rch-webtop
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Europe/Moscow
+    volumes:
+      - ./webtop-config:/config
+    ports:
+      - "3000:3000"
+    shm_size: "1gb"
+    restart: unless-stopped
+
+  mediamtx:
+    image: bluenviron/mediamtx:latest
+    container_name: rch-mediamtx
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml:ro
+    ports:
+      - "8554:8554"
+      - "8888:8888"
+      - "8889:8889"
+    restart: unless-stopped
+
+  cam-mic-publisher:
+    image: linuxserver/ffmpeg:latest
+    container_name: rch-ffmpeg
+    depends_on:
+      - mediamtx
+    devices:
+      - /dev/video0:/dev/video0
+      - /dev/snd:/dev/snd
+    volumes:
+      - ./start-ffmpeg.sh:/start-ffmpeg.sh:ro
+    command: sh /start-ffmpeg.sh
+    restart: unless-stopped
+
