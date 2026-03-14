@@ -114,10 +114,9 @@ a {
 }
 
 .dashboard {
-  display: grid;
-  grid-template-columns: minmax(320px, 1fr) minmax(360px, 1.1fr);
+  display: flex;
+  flex-direction: column;
   gap: 20px;
-  align-items: start;
 }
 
 .topbar {
@@ -392,6 +391,17 @@ a {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
+}
+
+.sftp-controls {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.sftp-controls .button {
+  white-space: nowrap;
 }
 
 .service-card {

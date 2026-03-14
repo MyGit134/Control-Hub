@@ -320,7 +320,7 @@ function renderTabContent(machine, isOwner) {
         <div class="panel">
           <div class="grid two">
             <input class="input mono" id="sftp-path" placeholder="/home/user" value="/" />
-            <div style="display:flex; gap:10px;">
+            <div class="sftp-controls">
               <button class="button" id="sftp-up">Вверх</button>
               <button class="button" id="sftp-refresh">Обновить</button>
               <label class="button">
