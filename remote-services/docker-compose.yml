@@ -44,7 +44,9 @@ services:
     restart: unless-stopped
 
   novnc:
-    image: novnc/novnc:latest
+    build:
+      context: ./novnc
+      dockerfile: Dockerfile
     container_name: rch-novnc
     profiles: ["desktop-real"]
     network_mode: host

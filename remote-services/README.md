@@ -29,6 +29,7 @@ docker compose --profile desktop-real up -d
 ### Desktop (Real GUI)
 noVNC слушает порт `6080` и проксирует VNC‑сервер хоста.
 По умолчанию ожидается VNC на `127.0.0.1:5900` на самой машине.
+`desktop-real` теперь собирается локально из `remote-services/novnc/`, логин в `ghcr.io` не нужен.
 
 #### Автоматическая установка VNC (x11vnc/wayvnc)
 Запусти один раз на управляемой машине:
