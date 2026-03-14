@@ -44,6 +44,14 @@ sudo ./install-vnc.sh
 - включит автозапуск,
 - стартует VNC на порту `5900`.
 
+Если авто‑детект ошибся, можно явно указать:
+
+```bash
+sudo FORCE_VNC=wayvnc ./install-vnc.sh
+# или
+sudo FORCE_VNC=x11vnc ./install-vnc.sh
+```
+
 ### Camera + Mic
 FFmpeg забирает видео из `/dev/video0` и аудио из ALSA `default`, публикует поток в MediaMTX:
 

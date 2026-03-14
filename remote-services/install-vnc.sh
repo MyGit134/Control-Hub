@@ -32,19 +32,60 @@ install_pkg() {
   exit 1
 }
 
+pick_session() {
+  if ! command -v loginctl >/dev/null 2>&1; then
+    return 1
+  fi
+
+  sessions=$(loginctl list-sessions --no-legend 2>/dev/null | awk '{print $1}')
+  for sid in $sessions; do
+    active=$(loginctl show-session "$sid" -p Active --value 2>/dev/null || true)
+    if [ "$active" != "yes" ]; then
+      continue
+    fi
+    stype=$(loginctl show-session "$sid" -p Type --value 2>/dev/null || true)
+    suser=$(loginctl show-session "$sid" -p Name --value 2>/dev/null || true)
+    suid=$(loginctl show-session "$sid" -p User --value 2>/dev/null || true)
+    sdisp=$(loginctl show-session "$sid" -p Display --value 2>/dev/null || true)
+    if [ -n "$suser" ] && [ -n "$stype" ]; then
+      SESSION_TYPE="$stype"
+      SESSION_USER="$suser"
+      SESSION_UID="$suid"
+      SESSION_DISPLAY="$sdisp"
+      return 0
+    fi
+  done
+  return 1
+}
+
 setup_x11vnc() {
+  user="$1"
+  uid="$2"
+  display="$3"
+
   if ! command -v x11vnc >/dev/null 2>&1; then
     install_pkg x11vnc
   fi
 
-  cat >/etc/systemd/system/rch-x11vnc.service <<'EOF'
+  xauth="/home/$user/.Xauthority"
+  if [ ! -f "$xauth" ] && [ -n "$uid" ] && [ -d "/run/user/$uid" ]; then
+    guess=$(ls /run/user/$uid/.mutter-Xwaylandauth.* 2>/dev/null | head -n1 || true)
+    if [ -n "$guess" ]; then
+      xauth="$guess"
+    fi
+  fi
+
+  cat >/etc/systemd/system/rch-x11vnc.service <<EOF
 [Unit]
 Description=Remote Control Hub x11vnc
 After=graphical.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/x11vnc -display :0 -auth guess -forever -shared -rfbport 5900 -nopw
+User=$user
+Environment=DISPLAY=${display:-:0}
+Environment=XAUTHORITY=$xauth
+ExecStart=/usr/bin/x11vnc -display ${display:-:0} -auth guess -forever -shared -rfbport 5900 -nopw -noxdamage -nowf
 Restart=on-failure
 RestartSec=2
 
@@ -60,45 +101,89 @@ EOF
 }
 
 setup_wayvnc() {
+  user="$1"
+  uid="$2"
+
   if ! command -v wayvnc >/dev/null 2>&1; then
     install_pkg wayvnc
   fi
 
-  cat >/etc/systemd/system/rch-wayvnc.service <<'EOF'
+  if [ -z "$uid" ]; then
+    echo "Cannot determine user UID for wayvnc"
+    exit 1
+  fi
+
+  runtime_dir="/run/user/$uid"
+  wl_display=""
+  if [ -d "$runtime_dir" ]; then
+    wl_display=$(ls "$runtime_dir"/wayland-* 2>/dev/null | head -n1 || true)
+  fi
+  if [ -n "$wl_display" ]; then
+    wl_display=$(basename "$wl_display")
+  else
+    wl_display="wayland-0"
+  fi
+
+  user_dir="/home/$user/.config/systemd/user"
+  mkdir -p "$user_dir"
+
+  cat >"$user_dir/rch-wayvnc.service" <<EOF
 [Unit]
 Description=Remote Control Hub wayvnc
 After=graphical.target
 
 [Service]
 Type=simple
+Environment=WAYLAND_DISPLAY=$wl_display
+Environment=XDG_RUNTIME_DIR=/run/user/%U
 ExecStart=/usr/bin/wayvnc 127.0.0.1 5900
 Restart=on-failure
 RestartSec=2
 
 [Install]
-WantedBy=graphical.target
+WantedBy=default.target
 EOF
 
-  systemctl daemon-reload
-  systemctl enable rch-wayvnc.service
-  systemctl restart rch-wayvnc.service
-  systemctl status --no-pager rch-wayvnc.service || true
+  chown -R "$user":"$user" "/home/$user/.config"
+
+  loginctl enable-linger "$user" || true
+  sudo -u "$user" XDG_RUNTIME_DIR="/run/user/$uid" systemctl --user daemon-reload || true
+  sudo -u "$user" XDG_RUNTIME_DIR="/run/user/$uid" systemctl --user enable rch-wayvnc.service || true
+  sudo -u "$user" XDG_RUNTIME_DIR="/run/user/$uid" systemctl --user restart rch-wayvnc.service || true
+
   echo "wayvnc installed and started. Port: 5900"
 }
 
-session_type="${XDG_SESSION_TYPE:-}"
-if [ -z "$session_type" ]; then
-  if [ -n "${WAYLAND_DISPLAY:-}" ]; then
-    session_type="wayland"
-  else
-    session_type="x11"
-  fi
+SESSION_TYPE=""
+SESSION_USER=""
+SESSION_UID=""
+SESSION_DISPLAY=""
+
+pick_session || true
+
+if [ -z "$SESSION_USER" ]; then
+  SESSION_USER=$(logname 2>/dev/null || true)
+fi
+if [ -z "$SESSION_UID" ] && [ -n "$SESSION_USER" ]; then
+  SESSION_UID=$(id -u "$SESSION_USER" 2>/dev/null || true)
 fi
 
-if [ "$session_type" = "wayland" ]; then
+force="${FORCE_VNC:-}"
+if [ "$force" = "wayvnc" ]; then
+  echo "FORCE_VNC=wayvnc set"
+  setup_wayvnc "$SESSION_USER" "$SESSION_UID"
+  exit 0
+fi
+if [ "$force" = "x11vnc" ]; then
+  echo "FORCE_VNC=x11vnc set"
+  setup_x11vnc "$SESSION_USER" "$SESSION_UID" "$SESSION_DISPLAY"
+  exit 0
+fi
+
+if [ "${SESSION_TYPE:-}" = "wayland" ]; then
   echo "Wayland session detected. Installing wayvnc..."
-  setup_wayvnc
+  setup_wayvnc "$SESSION_USER" "$SESSION_UID"
 else
-  echo "X11 session detected. Installing x11vnc..."
-  setup_x11vnc
+  echo "X11 session detected (or unknown). Installing x11vnc..."
+  setup_x11vnc "$SESSION_USER" "$SESSION_UID" "$SESSION_DISPLAY"
 fi
