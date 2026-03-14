@@ -1,2 +1,4 @@
 .env
 server/.env
+remote-services/.env
+remote-services/ssh/

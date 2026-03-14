@@ -5,12 +5,17 @@
 - Desktop (виртуальный): `webtop` (браузерный рабочий стол)
 - Desktop (реальный GUI): noVNC + VNC‑сервер на хосте
 - Camera/Mic: MediaMTX + FFmpeg публикация в RTSP
+- Reverse SSH tunnel: автопроброс портов на VPS (одним контейнером)
 
 ## Запуск
 
 Все сервисы теперь опциональны и запускаются через профили.
 
 ```bash
+# Reverse SSH (обязательно для проброса портов)
+# Заполните .env (пример в .env.example) и запускайте обычный compose:
+docker compose up -d
+
 # Виртуальный рабочий стол (webtop)
 docker compose --profile desktop-webtop up -d
 
@@ -20,6 +25,27 @@ docker compose --profile camera up -d
 # Реальный GUI через noVNC (нужен VNC сервер на хосте)
 docker compose --profile desktop-real up -d
 ```
+
+## Reverse SSH (авто-туннель)
+
+Контейнер `reverse-ssh` сам поднимает постоянное SSH‑соединение и пробрасывает все заданные порты на VPS.
+
+1. Скопируйте пример:
+
+```bash
+cp .env.example .env
+```
+
+2. Укажите свои параметры:
+
+```
+SSH_HOST=your-vps-ip
+SSH_USER=controller
+SSH_PASSWORD=change-me
+TUNNEL_PORTS=6080:6080,3000:3000,8888:8888,8889:8889,8554:8554
+```
+
+Контейнер сам перезапускает соединение после разрывов и после перезагрузки машины.
 
 ## Что получится
 
