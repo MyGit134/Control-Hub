@@ -14,10 +14,14 @@ function verifyToken(token) {
 }
 
 function setAuthCookie(res, token) {
+  const secure =
+    process.env.COOKIE_SECURE === 'true' ||
+    process.env.COOKIE_SECURE === '1' ||
+    process.env.NODE_ENV === 'production';
   res.cookie(TOKEN_NAME, token, {
     httpOnly: true,
     sameSite: 'lax',
-    secure: false,
+    secure,
     maxAge: 12 * 60 * 60 * 1000,
   });
 }

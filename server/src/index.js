@@ -48,6 +48,18 @@ app.use('/vendor/xterm', express.static(path.join(XTERM_DIR, 'lib')));
 app.use('/vendor/xterm', express.static(path.join(XTERM_DIR, 'css')));
 app.use('/vendor/xterm-addon-fit', express.static(path.join(XTERM_FIT_DIR, 'lib')));
 
+proxy.on('error', (err, _req, res) => {
+  console.error('Proxy error:', err.message);
+  if (res && typeof res.writeHead === 'function') {
+    res.writeHead(502, { 'Content-Type': 'text/plain' });
+    res.end('Bad gateway');
+    return;
+  }
+  if (res && typeof res.end === 'function') {
+    res.end();
+  }
+});
+
 function ensureBootstrapAdmin() {
   const count = db.prepare('SELECT COUNT(*) as c FROM users').get();
   if (count.c > 0) return;
@@ -120,6 +132,15 @@ function checkPort(host, port, timeoutMs = 1500) {
     socket.once('error', () => finish(false));
     socket.connect(port, host);
   });
+}
+
+function cleanupUpload(filePath) {
+  if (!filePath) return;
+  try {
+    fs.unlinkSync(filePath);
+  } catch {
+    // ignore
+  }
 }
 
 app.post('/api/auth/register', async (req, res) => {
@@ -501,6 +522,7 @@ app.post('/api/sftp/upload', authRequired, upload.single('file'), async (req, re
   const remoteDir = String(req.query.path || '/');
   const machine = fetchMachine(machineId);
   if (!machine || !canAccessMachine(req.user, machine)) {
+    cleanupUpload(req.file?.path);
     return res.status(404).json({ error: 'Not found' });
   }
   if (!req.file) return res.status(400).json({ error: 'Missing file' });
@@ -509,14 +531,10 @@ app.post('/api/sftp/upload', authRequired, upload.single('file'), async (req, re
   const remotePath = path.posix.join(normalizedDir, req.file.originalname);
   try {
     await withSftp(machine, (sftp) => sftp.put(localPath, remotePath, { flags: 'w' }));
-    fs.unlinkSync(localPath);
+    cleanupUpload(localPath);
     res.json({ ok: true });
   } catch (err) {
-    try {
-      fs.unlinkSync(localPath);
-    } catch {
-      // ignore
-    }
+    cleanupUpload(localPath);
     res.status(500).json({ error: err.message });
   }
 });

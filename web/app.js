@@ -14,6 +14,7 @@ const state = {
   searchQuery: '',
   showAddMachine: false,
   dataLoaded: false,
+  terminalSession: null,
 };
 
 function qs(selector, parent = document) {
@@ -22,6 +23,15 @@ function qs(selector, parent = document) {
 
 function qsa(selector, parent = document) {
   return Array.from(parent.querySelectorAll(selector));
+}
+
+function esc(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 async function api(path, options = {}) {
@@ -92,6 +102,9 @@ async function refreshData() {
 }
 
 function setActiveTab(tab) {
+  if (state.activeTab === 'ssh' && tab !== 'ssh') {
+    cleanupTerminal();
+  }
   state.activeTab = tab;
   render();
 }
@@ -131,13 +144,16 @@ function getVisibleMachines() {
 }
 
 function groupByGroup(list) {
-  const groups = {};
+  const groups = new Map();
   list.forEach((m) => {
-    const key = m.group_name || 'Без группы';
-    if (!groups[key]) groups[key] = [];
-    groups[key].push(m);
+    const id = m.group_id || 0;
+    const name = m.group_name || 'Без группы';
+    if (!groups.has(id)) {
+      groups.set(id, { id, name, items: [] });
+    }
+    groups.get(id).items.push(m);
   });
-  return groups;
+  return Array.from(groups.values()).sort((a, b) => a.name.localeCompare(b.name));
 }
 
 function getAssignableGroups() {
@@ -248,6 +264,10 @@ function renderMachineDetail(machine) {
   const status = state.statuses[machine.id];
   const statusClass = status === true ? 'online' : status === false ? 'offline' : 'unknown';
   const statusLabel = status === true ? 'Online' : status === false ? 'Offline' : '...';
+  const safeName = esc(machine.name);
+  const safeUser = esc(machine.ssh_username);
+  const safeHost = esc(machine.ssh_host);
+  const safeGroup = esc(machine.group_name || 'Без группы');
 
   const tabs = [
     { id: 'overview', label: 'Обзор' },
@@ -266,9 +286,9 @@ function renderMachineDetail(machine) {
     <div class="panel">
       <div class="topbar">
         <div>
-          <h1>${machine.name}</h1>
-          <div class="small">${machine.ssh_username}@${machine.ssh_host}:${machine.ssh_port}</div>
-          <div class="small">Группа: ${machine.group_name || 'Без группы'}</div>
+          <h1>${safeName}</h1>
+          <div class="small">${safeUser}@${safeHost}:${machine.ssh_port}</div>
+          <div class="small">Группа: ${safeGroup}</div>
         </div>
         <div style="display:flex; gap:8px; align-items:center;">
           <span class="status ${statusClass}">${statusLabel}</span>
@@ -328,8 +348,10 @@ function renderTabContent(machine, isOwner) {
       .map(
         (svc) => `
           <div class="service-card">
-            <strong>${svc.name}</strong>
-            <div class="small">${svc.type} · ${svc.protocol}://${svc.target_host}:${svc.target_port}${svc.target_path}</div>
+            <strong>${esc(svc.name)}</strong>
+            <div class="small">${esc(svc.type)} · ${esc(svc.protocol)}://${esc(svc.target_host)}:${svc.target_port}${esc(
+              svc.target_path
+            )}</div>
             <button class="button" data-action="open-service" data-id="${svc.id}">Открыть</button>
             ${isOwner ? `<button class="button danger" data-action="delete-service" data-id="${svc.id}">Удалить</button>` : ''}
           </div>
@@ -353,8 +375,8 @@ function renderTabContent(machine, isOwner) {
     <div class="grid two">
       <div class="panel">
         <div class="label">Описание</div>
-        <div>${machine.notes || 'Без заметок'}</div>
-        <div style="margin-top:12px;"><span class="label">Владелец</span> ${machine.owner_email || '—'}</div>
+        <div>${esc(machine.notes || 'Без заметок')}</div>
+        <div style="margin-top:12px;"><span class="label">Владелец</span> ${esc(machine.owner_email || '—')}</div>
       </div>
       ${isOwner ? renderMachineForm(machine) : '<div class="panel">Нет прав на редактирование.</div>'}
     </div>
@@ -366,7 +388,8 @@ function renderMachineForm(machine) {
   const groupOptions = [
     `<option value="" ${!machine.group_id ? 'selected' : ''}>Без группы</option>`,
     ...assignable.map(
-      (g) => `<option value="${g.id}" ${String(machine.group_id) === String(g.id) ? 'selected' : ''}>${g.name}</option>`
+      (g) =>
+        `<option value="${g.id}" ${String(machine.group_id) === String(g.id) ? 'selected' : ''}>${esc(g.name)}</option>`
     ),
   ].join('');
 
@@ -374,13 +397,13 @@ function renderMachineForm(machine) {
     <div class="panel">
       <div class="label">Редактирование</div>
       <div class="grid">
-        <input class="input" id="edit-name" placeholder="Имя" value="${machine.name}" />
+        <input class="input" id="edit-name" placeholder="Имя" value="${esc(machine.name)}" />
         <select class="input" id="edit-group">
           ${groupOptions}
         </select>
-        <input class="input" id="edit-ssh-host" placeholder="SSH host" value="${machine.ssh_host}" />
+        <input class="input" id="edit-ssh-host" placeholder="SSH host" value="${esc(machine.ssh_host)}" />
         <input class="input" id="edit-ssh-port" placeholder="SSH port" value="${machine.ssh_port}" />
-        <input class="input" id="edit-ssh-user" placeholder="SSH username" value="${machine.ssh_username}" />
+        <input class="input" id="edit-ssh-user" placeholder="SSH username" value="${esc(machine.ssh_username)}" />
         <select class="input" id="edit-auth-type">
           <option value="password" ${machine.ssh_auth_type === 'password' ? 'selected' : ''}>Пароль</option>
           <option value="key" ${machine.ssh_auth_type === 'key' ? 'selected' : ''}>Приватный ключ</option>
@@ -392,7 +415,7 @@ function renderMachineForm(machine) {
           <option value="private" ${machine.visibility === 'private' ? 'selected' : ''}>Только мне</option>
           <option value="shared" ${machine.visibility === 'shared' ? 'selected' : ''}>Всем пользователям</option>
         </select>
-        <textarea class="input" id="edit-notes" placeholder="Заметки" rows="3">${machine.notes || ''}</textarea>
+        <textarea class="input" id="edit-notes" placeholder="Заметки" rows="3">${esc(machine.notes || '')}</textarea>
         <button class="button accent" id="save-machine">Сохранить</button>
         <button class="button danger" id="delete-machine">Удалить</button>
       </div>
@@ -443,13 +466,14 @@ function renderDeviceSection() {
     `<option value="all" ${state.groupFilter === 'all' ? 'selected' : ''}>Все группы</option>`,
     `<option value="ungrouped" ${state.groupFilter === 'ungrouped' ? 'selected' : ''}>Без группы</option>`,
     ...state.groups.map(
-      (g) => `<option value="${g.id}" ${String(state.groupFilter) === String(g.id) ? 'selected' : ''}>${g.name}</option>`
+      (g) =>
+        `<option value="${g.id}" ${String(state.groupFilter) === String(g.id) ? 'selected' : ''}>${esc(g.name)}</option>`
     ),
   ].join('');
 
-  const groupBlocks = Object.entries(grouped)
-    .map(([groupName, items]) => {
-      const cards = items
+  const groupBlocks = grouped
+    .map((group) => {
+      const cards = group.items
         .map((m) => {
           const status = state.statuses[m.id];
           const statusClass = status === true ? 'online' : status === false ? 'offline' : 'unknown';
@@ -459,21 +483,22 @@ function renderDeviceSection() {
           const groupOptions = [
             `<option value="">Без группы</option>`,
             ...assignable.map(
-              (g) => `<option value="${g.id}" ${String(m.group_id) === String(g.id) ? 'selected' : ''}>${g.name}</option>`
+              (g) =>
+                `<option value="${g.id}" ${String(m.group_id) === String(g.id) ? 'selected' : ''}>${esc(g.name)}</option>`
             ),
           ].join('');
           return `
             <div class="device-card ${m.id === state.selectedMachineId ? 'active' : ''}" data-id="${m.id}">
               <div class="device-head">
-                <strong>${m.name}</strong>
+                <strong>${esc(m.name)}</strong>
                 <span class="status ${statusClass}">${statusLabel}</span>
               </div>
-              <div class="small mono">${m.ssh_username}@${m.ssh_host}:${m.ssh_port}</div>
-              <div class="small">${m.owner_email || ''}</div>
+              <div class="small mono">${esc(m.ssh_username)}@${esc(m.ssh_host)}:${m.ssh_port}</div>
+              <div class="small">${esc(m.owner_email || '')}</div>
               ${
                 canEditGroup
                   ? `<select class="input group-inline" data-group-machine="${m.id}">${groupOptions}</select>`
-                  : `<div class="small">Группа: ${m.group_name || 'Без группы'}</div>`
+                  : `<div class="small">Группа: ${esc(m.group_name || 'Без группы')}</div>`
               }
             </div>
           `;
@@ -481,7 +506,7 @@ function renderDeviceSection() {
         .join('');
       return `
         <div class="group-block">
-          <div class="group-title">${groupName}</div>
+          <div class="group-title">${esc(group.name)}</div>
           <div class="device-grid">${cards || '<div class="small">Нет устройств</div>'}</div>
         </div>
       `;
@@ -494,7 +519,7 @@ function renderDeviceSection() {
     .map(
       (g) => `
       <div class="group-row">
-        <input class="input group-edit" data-group-edit="${g.id}" value="${g.name}" />
+        <input class="input group-edit" data-group-edit="${g.id}" value="${esc(g.name)}" />
         <button class="button" data-group-save="${g.id}">Сохранить</button>
         <button class="button danger" data-group-delete="${g.id}">Удалить</button>
       </div>
@@ -519,7 +544,7 @@ function renderDeviceSection() {
         <div class="tab ${state.deviceTab === 'personal' ? 'active' : ''}" data-device-tab="personal">Личные</div>
       </div>
       <div class="filters">
-        <input class="input" id="device-search" placeholder="Поиск по названию или IP" value="${state.searchQuery}" />
+        <input class="input" id="device-search" placeholder="Поиск по названию или IP" value="${esc(state.searchQuery)}" />
         <select class="input" id="group-filter">${groupOptions}</select>
         <div class="group-create">
           <input class="input" id="group-name" placeholder="Новая группа" />
@@ -542,7 +567,7 @@ function renderAddMachineForm() {
   const assignable = getAssignableGroups();
   const groupOptions = [
     `<option value="">Без группы</option>`,
-    ...assignable.map((g) => `<option value="${g.id}">${g.name}</option>`),
+    ...assignable.map((g) => `<option value="${g.id}">${esc(g.name)}</option>`),
   ].join('');
 
   return `
@@ -626,7 +651,7 @@ function renderMulti() {
       (m) => `
         <label style="display:flex; align-items:center; gap:8px;">
           <input type="checkbox" value="${m.id}" class="multi-machine" />
-          <span>${m.name}</span>
+          <span>${esc(m.name)}</span>
         </label>
       `
     )
@@ -982,9 +1007,28 @@ function openService(serviceId) {
   frameWrap.style.display = 'block';
 }
 
+function cleanupTerminal() {
+  const session = state.terminalSession;
+  if (!session) return;
+  if (session.resizeHandler) {
+    window.removeEventListener('resize', session.resizeHandler);
+  }
+  if (session.ws && session.ws.readyState === WebSocket.OPEN) {
+    session.ws.close();
+  } else if (session.ws) {
+    try {
+      session.ws.close();
+    } catch {
+      // ignore
+    }
+  }
+  state.terminalSession = null;
+}
+
 async function initTerminal(machineId) {
   const terminalEl = qs('#terminal');
   if (!terminalEl) return;
+  cleanupTerminal();
   terminalEl.innerHTML = '<div class="small mono">Connecting...</div>';
   terminalEl.style.minHeight = '420px';
   const hasXterm = window.Terminal && window.FitAddon;
@@ -1035,6 +1079,7 @@ async function initTerminal(machineId) {
       }
     });
 
+    state.terminalSession = { ws, machineId };
     return;
   }
   const term = new window.Terminal({
@@ -1084,10 +1129,12 @@ async function initTerminal(machineId) {
     ws.send(JSON.stringify({ type: 'data', data }));
   });
 
-  window.addEventListener('resize', () => {
+  const resizeHandler = () => {
     fitAddon.fit();
     ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
-  });
+  };
+  window.addEventListener('resize', resizeHandler);
+  state.terminalSession = { ws, machineId, resizeHandler };
 }
 
 async function initSftp(machineId) {
@@ -1101,13 +1148,23 @@ async function initSftp(machineId) {
       .map(
         (item) => `
         <tr>
-          <td><span class="mono">${item.name}</span></td>
+          <td><span class="mono">${esc(item.name)}</span></td>
           <td>${item.type}</td>
           <td>${item.size || '-'}</td>
           <td>
-            ${item.type === 'd' ? `<button class="button" data-action="enter" data-name="${item.name}">Открыть</button>` : ''}
-            ${item.type !== 'd' ? `<button class="button" data-action="download" data-name="${item.name}">Скачать</button>` : ''}
-            <button class="button danger" data-action="delete" data-name="${item.name}">Удалить</button>
+            ${
+              item.type === 'd'
+                ? `<button class="button" data-action="enter" data-name="${encodeURIComponent(item.name)}">Открыть</button>`
+                : ''
+            }
+            ${
+              item.type !== 'd'
+                ? `<button class="button" data-action="download" data-name="${encodeURIComponent(
+                    item.name
+                  )}">Скачать</button>`
+                : ''
+            }
+            <button class="button danger" data-action="delete" data-name="${encodeURIComponent(item.name)}">Удалить</button>
           </td>
         </tr>
       `
@@ -1116,7 +1173,7 @@ async function initSftp(machineId) {
 
     qsa('[data-action="enter"]').forEach((btn) => {
       btn.onclick = () => {
-        const next = path.replace(/\/$/, '') + '/' + btn.dataset.name;
+        const next = path.replace(/\/$/, '') + '/' + decodeURIComponent(btn.dataset.name || '');
         pathInput.value = next;
         refresh();
       };
@@ -1124,7 +1181,7 @@ async function initSftp(machineId) {
 
     qsa('[data-action="download"]').forEach((btn) => {
       btn.onclick = () => {
-        const target = path.replace(/\/$/, '') + '/' + btn.dataset.name;
+        const target = path.replace(/\/$/, '') + '/' + decodeURIComponent(btn.dataset.name || '');
         const link = document.createElement('a');
         link.href = `/api/sftp/download?machineId=${machineId}&path=${encodeURIComponent(target)}`;
         link.target = '_blank';
@@ -1137,7 +1194,7 @@ async function initSftp(machineId) {
 
     qsa('[data-action="delete"]').forEach((btn) => {
       btn.onclick = async () => {
-        const target = path.replace(/\/$/, '') + '/' + btn.dataset.name;
+        const target = path.replace(/\/$/, '') + '/' + decodeURIComponent(btn.dataset.name || '');
         await api(`/api/sftp/delete?machineId=${machineId}&path=${encodeURIComponent(target)}`, { method: 'DELETE' });
         refresh();
       };
@@ -1217,7 +1274,7 @@ async function loadAdminPanels() {
       </div>
       <div class="grid">${tokens
         .map(
-          (t) => `<div class="panel"><strong>${t.token}</strong><div class="small">Использований: ${t.uses_left}</div><button class="button danger" data-token="${t.id}">Удалить</button></div>`
+          (t) => `<div class="panel"><strong>${esc(t.token)}</strong><div class="small">Использований: ${t.uses_left}</div><button class="button danger" data-token="${t.id}">Удалить</button></div>`
         )
         .join('')}</div>
     </div>
@@ -1228,8 +1285,8 @@ async function loadAdminPanels() {
     <div class="grid">${users
       .map(
         (u) => `<div class="panel">
-          <strong>${u.email}</strong>
-          <div class="small">${u.role}</div>
+          <strong>${esc(u.email)}</strong>
+          <div class="small">${esc(u.role)}</div>
           <label class="small" style="display:flex; gap:8px; align-items:center; margin:8px 0;">
             <input type="checkbox" data-perm="${u.id}" ${u.can_run_multi ? 'checked' : ''} ${u.role === 'admin' ? 'disabled' : ''}/>
             Разрешить мульти-команды
