@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env sh
+#!/bin/sh
 set -eu
 
 VNC_SERVER="${VNC_SERVER:-127.0.0.1:5900}"
