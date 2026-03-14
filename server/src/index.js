@@ -318,7 +318,7 @@ app.post('/api/machines', authRequired, (req, res) => {
     INSERT INTO machines (
       name, owner_id, visibility, group_id, ssh_host, ssh_port, ssh_username,
       ssh_auth_type, ssh_password_enc, ssh_private_key_enc, ssh_passphrase_enc, notes
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   stmt.run(
