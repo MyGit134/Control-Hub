@@ -58,6 +58,21 @@ pick_session() {
   return 1
 }
 
+detect_display() {
+  if [ -n "${SESSION_DISPLAY:-}" ]; then
+    return 0
+  fi
+  if [ -d /tmp/.X11-unix ]; then
+    sock=$(ls /tmp/.X11-unix/X* 2>/dev/null | head -n1 || true)
+    if [ -n "$sock" ]; then
+      num=$(basename "$sock" | sed 's/^X//')
+      if [ -n "$num" ]; then
+        SESSION_DISPLAY=":$num"
+      fi
+    fi
+  fi
+}
+
 setup_x11vnc() {
   user="$1"
   uid="$2"
@@ -172,6 +187,7 @@ SESSION_UID=""
 SESSION_DISPLAY=""
 
 pick_session || true
+detect_display
 
 if [ -z "$SESSION_USER" ]; then
   SESSION_USER=$(logname 2>/dev/null || true)
