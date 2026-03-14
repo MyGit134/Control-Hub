@@ -3,10 +3,17 @@
 const state = {
   user: null,
   machines: [],
+  groups: [],
+  statuses: {},
   selectedMachineId: null,
   services: {},
   activeTab: 'overview',
   activeServiceId: null,
+  deviceTab: 'public',
+  groupFilter: 'all',
+  searchQuery: '',
+  showAddMachine: false,
+  dataLoaded: false,
 };
 
 function qs(selector, parent = document) {
@@ -58,6 +65,28 @@ async function loadMachines() {
   }
 }
 
+async function loadGroups() {
+  if (!state.user) return;
+  state.groups = await api('/api/groups');
+}
+
+async function loadStatuses() {
+  if (!state.user || !state.machines.length) return;
+  const ids = state.machines.map((m) => m.id).join(',');
+  const data = await api(`/api/machines/status?ids=${ids}`);
+  state.statuses = {};
+  data.forEach((item) => {
+    state.statuses[item.id] = item.online;
+  });
+}
+
+async function refreshData() {
+  if (!state.dataLoaded) {
+    await refreshData();
+  }
+  state.dataLoaded = true;
+}
+
 function setActiveTab(tab) {
   state.activeTab = tab;
   render();
@@ -65,6 +94,51 @@ function setActiveTab(tab) {
 
 function navigate(hash) {
   location.hash = hash;
+}
+
+function getVisibleMachines() {
+  const query = state.searchQuery.trim().toLowerCase();
+  let list = state.machines;
+  if (state.deviceTab === 'public') {
+    list = list.filter((m) => m.visibility === 'shared');
+  } else if (state.deviceTab === 'personal') {
+    list = list.filter((m) => m.owner_id === state.user.id);
+  }
+  if (state.groupFilter !== 'all') {
+    if (state.groupFilter === 'ungrouped') {
+      list = list.filter((m) => !m.group_id);
+    } else {
+      list = list.filter((m) => String(m.group_id) === String(state.groupFilter));
+    }
+  }
+  if (query) {
+    list = list.filter((m) => {
+      const name = (m.name || '').toLowerCase();
+      const host = (m.ssh_host || '').toLowerCase();
+      return name.includes(query) || host.includes(query);
+    });
+  }
+  return list.sort((a, b) => {
+    const g1 = a.group_name || '';
+    const g2 = b.group_name || '';
+    if (g1 !== g2) return g1.localeCompare(g2);
+    return (a.name || '').localeCompare(b.name || '');
+  });
+}
+
+function groupByGroup(list) {
+  const groups = {};
+  list.forEach((m) => {
+    const key = m.group_name || 'Без группы';
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(m);
+  });
+  return groups;
+}
+
+function getAssignableGroups() {
+  if (state.user?.role === 'admin') return state.groups;
+  return state.groups.filter((g) => g.owner_id === state.user.id);
 }
 
 function renderLogin() {
@@ -147,28 +221,13 @@ function renderRegister() {
 }
 
 function renderSidebar() {
-  const machineCards = state.machines
-    .map(
-      (m) => `
-      <div class="machine-card ${m.id === state.selectedMachineId ? 'active' : ''}" data-id="${m.id}">
-        <div><strong>${m.name}</strong></div>
-        <small>${m.ssh_username}@${m.ssh_host}:${m.ssh_port}</small>
-      </div>
-    `
-    )
-    .join('');
-
   return `
     <aside class="sidebar">
       <div class="brand">Remote Control Hub</div>
       <div class="nav-group">
-        <div class="nav-item ${location.hash.startsWith('#/dashboard') ? 'active' : ''}" data-nav="dashboard">Обзор</div>
-        <div class="nav-item ${location.hash.startsWith('#/multi') ? 'active' : ''}" data-nav="multi">Мульти-команды</div>
+        <div class="nav-item ${location.hash.startsWith('#/dashboard') ? 'active' : ''}" data-nav="dashboard">Устройства</div>
+        ${(state.user?.role === 'admin' || state.user?.can_run_multi) ? `<div class="nav-item ${location.hash.startsWith('#/multi') ? 'active' : ''}" data-nav="multi">Мульти-команды</div>` : ''}
         ${state.user?.role === 'admin' ? `<div class="nav-item ${location.hash.startsWith('#/admin') ? 'active' : ''}" data-nav="admin">Администрирование</div>` : ''}
-      </div>
-      <div>
-        <div class="label">Машины</div>
-        <div class="machine-list">${machineCards || '<div class="small">Пока нет машин</div>'}</div>
       </div>
       <button class="button" data-action="add-machine">+ Добавить машину</button>
       <button class="button" data-action="logout">Выйти</button>
@@ -182,6 +241,9 @@ function renderMachineDetail(machine) {
   }
 
   const isOwner = state.user.role === 'admin' || machine.owner_id === state.user.id;
+  const status = state.statuses[machine.id];
+  const statusClass = status === true ? 'online' : status === false ? 'offline' : 'unknown';
+  const statusLabel = status === true ? 'Online' : status === false ? 'Offline' : '...';
 
   const tabs = [
     { id: 'overview', label: 'Обзор' },
@@ -202,8 +264,12 @@ function renderMachineDetail(machine) {
         <div>
           <h1>${machine.name}</h1>
           <div class="small">${machine.ssh_username}@${machine.ssh_host}:${machine.ssh_port}</div>
+          <div class="small">Группа: ${machine.group_name || 'Без группы'}</div>
         </div>
-        <div class="tag">${machine.visibility === 'shared' ? 'Shared' : 'Private'}</div>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <span class="status ${statusClass}">${statusLabel}</span>
+          <div class="tag">${machine.visibility === 'shared' ? 'Shared' : 'Private'}</div>
+        </div>
       </div>
       <div class="tabs">${tabButtons}</div>
       <div id="tab-content" style="margin-top:16px;">
@@ -292,11 +358,22 @@ function renderTabContent(machine, isOwner) {
 }
 
 function renderMachineForm(machine) {
+  const assignable = getAssignableGroups();
+  const groupOptions = [
+    `<option value="" ${!machine.group_id ? 'selected' : ''}>Без группы</option>`,
+    ...assignable.map(
+      (g) => `<option value="${g.id}" ${String(machine.group_id) === String(g.id) ? 'selected' : ''}>${g.name}</option>`
+    ),
+  ].join('');
+
   return `
     <div class="panel">
       <div class="label">Редактирование</div>
       <div class="grid">
         <input class="input" id="edit-name" placeholder="Имя" value="${machine.name}" />
+        <select class="input" id="edit-group">
+          ${groupOptions}
+        </select>
         <input class="input" id="edit-ssh-host" placeholder="SSH host" value="${machine.ssh_host}" />
         <input class="input" id="edit-ssh-port" placeholder="SSH port" value="${machine.ssh_port}" />
         <input class="input" id="edit-ssh-user" placeholder="SSH username" value="${machine.ssh_username}" />
@@ -328,6 +405,7 @@ function renderServiceForm() {
       </div>
       <div class="preset-bar" style="margin-bottom:12px;">
         <button class="button" data-preset="desktop">Desktop (Webtop)</button>
+        <button class="button" data-preset="desktop-real">Desktop (Real GUI/noVNC)</button>
         <button class="button" data-preset="camera-webrtc">Camera/Mic (WebRTC)</button>
         <button class="button" data-preset="camera-hls">Camera/Mic (HLS)</button>
       </div>
@@ -354,15 +432,162 @@ function renderServiceForm() {
   `;
 }
 
+function renderDeviceSection() {
+  const visible = getVisibleMachines();
+  const grouped = groupByGroup(visible);
+  const groupOptions = [
+    `<option value="all" ${state.groupFilter === 'all' ? 'selected' : ''}>Все группы</option>`,
+    `<option value="ungrouped" ${state.groupFilter === 'ungrouped' ? 'selected' : ''}>Без группы</option>`,
+    ...state.groups.map(
+      (g) => `<option value="${g.id}" ${String(state.groupFilter) === String(g.id) ? 'selected' : ''}>${g.name}</option>`
+    ),
+  ].join('');
+
+  const groupBlocks = Object.entries(grouped)
+    .map(([groupName, items]) => {
+      const cards = items
+        .map((m) => {
+          const status = state.statuses[m.id];
+          const statusClass = status === true ? 'online' : status === false ? 'offline' : 'unknown';
+          const statusLabel = status === true ? 'Online' : status === false ? 'Offline' : '...';
+          const canEditGroup = state.user.role === 'admin' || m.owner_id === state.user.id;
+          const assignable = getAssignableGroups();
+          const groupOptions = [
+            `<option value="">Без группы</option>`,
+            ...assignable.map(
+              (g) => `<option value="${g.id}" ${String(m.group_id) === String(g.id) ? 'selected' : ''}>${g.name}</option>`
+            ),
+          ].join('');
+          return `
+            <div class="device-card ${m.id === state.selectedMachineId ? 'active' : ''}" data-id="${m.id}">
+              <div class="device-head">
+                <strong>${m.name}</strong>
+                <span class="status ${statusClass}">${statusLabel}</span>
+              </div>
+              <div class="small mono">${m.ssh_username}@${m.ssh_host}:${m.ssh_port}</div>
+              <div class="small">${m.owner_email || ''}</div>
+              ${
+                canEditGroup
+                  ? `<select class="input group-inline" data-group-machine="${m.id}">${groupOptions}</select>`
+                  : `<div class="small">Группа: ${m.group_name || 'Без группы'}</div>`
+              }
+            </div>
+          `;
+        })
+        .join('');
+      return `
+        <div class="group-block">
+          <div class="group-title">${groupName}</div>
+          <div class="device-grid">${cards || '<div class="small">Нет устройств</div>'}</div>
+        </div>
+      `;
+    })
+    .join('');
+
+  const manageableGroups =
+    state.user.role === 'admin' ? state.groups : state.groups.filter((g) => g.owner_id === state.user.id);
+  const groupRows = manageableGroups
+    .map(
+      (g) => `
+      <div class="group-row">
+        <input class="input group-edit" data-group-edit="${g.id}" value="${g.name}" />
+        <button class="button" data-group-save="${g.id}">Сохранить</button>
+        <button class="button danger" data-group-delete="${g.id}">Удалить</button>
+      </div>
+    `
+    )
+    .join('');
+
+  return `
+    <div class="panel">
+      <div class="topbar">
+        <div>
+          <h1>Устройства</h1>
+          <div class="small">Публичные и личные машины</div>
+        </div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <button class="button" data-action="refresh-status">Обновить статус</button>
+          <button class="button accent" data-action="toggle-add">+ Добавить машину</button>
+        </div>
+      </div>
+      <div class="tabs">
+        <div class="tab ${state.deviceTab === 'public' ? 'active' : ''}" data-device-tab="public">Публичные</div>
+        <div class="tab ${state.deviceTab === 'personal' ? 'active' : ''}" data-device-tab="personal">Личные</div>
+      </div>
+      <div class="filters">
+        <input class="input" id="device-search" placeholder="Поиск по названию или IP" value="${state.searchQuery}" />
+        <select class="input" id="group-filter">${groupOptions}</select>
+        <div class="group-create">
+          <input class="input" id="group-name" placeholder="Новая группа" />
+          <button class="button" id="group-create">Создать</button>
+        </div>
+      </div>
+      <div class="group-manage">
+        <div class="label">Группы</div>
+        <div class="group-list">${groupRows || '<div class="small">Групп пока нет</div>'}</div>
+      </div>
+      ${state.showAddMachine ? renderAddMachineForm() : ''}
+      <div class="device-list">
+        ${groupBlocks || '<div class="small">Нет устройств</div>'}
+      </div>
+    </div>
+  `;
+}
+
+function renderAddMachineForm() {
+  const assignable = getAssignableGroups();
+  const groupOptions = [
+    `<option value="">Без группы</option>`,
+    ...assignable.map((g) => `<option value="${g.id}">${g.name}</option>`),
+  ].join('');
+
+  return `
+    <div class="panel" style="margin-top:16px;">
+      <div class="label">Добавить машину</div>
+      <div class="grid two">
+        <input class="input" id="add-name" placeholder="Имя" />
+        <select class="input" id="add-visibility">
+          <option value="private">Только мне</option>
+          <option value="shared">Всем пользователям</option>
+        </select>
+        <select class="input" id="add-group">
+          ${groupOptions}
+        </select>
+        <input class="input" id="add-ssh-host" placeholder="SSH host" value="127.0.0.1" />
+        <input class="input" id="add-ssh-port" placeholder="SSH port" value="22" />
+        <input class="input" id="add-ssh-user" placeholder="SSH username" value="root" />
+        <select class="input" id="add-auth-type">
+          <option value="password">Пароль</option>
+          <option value="key">Приватный ключ</option>
+        </select>
+        <input class="input" id="add-password" placeholder="Пароль" type="password" />
+        <textarea class="input" id="add-private-key" placeholder="Приватный ключ" rows="4"></textarea>
+        <input class="input" id="add-passphrase" placeholder="Passphrase" type="password" />
+        <textarea class="input" id="add-notes" placeholder="Заметки" rows="3"></textarea>
+      </div>
+      <div style="margin-top:12px; display:flex; gap:10px; flex-wrap:wrap;">
+        <button class="button accent" id="add-machine-submit">Создать</button>
+        <button class="button" id="add-machine-cancel">Отмена</button>
+      </div>
+    </div>
+  `;
+}
+
 function renderDashboard() {
   const sidebar = renderSidebar();
-  const machine = state.machines.find((m) => m.id === state.selectedMachineId);
+  const visible = getVisibleMachines();
+  const selected = visible.find((m) => m.id === state.selectedMachineId) || visible[0] || null;
+  state.selectedMachineId = selected?.id || null;
+  const machine = selected;
 
   app.innerHTML = `
     <div class="app-shell">
       ${sidebar}
       <main class="main">
-        ${renderMachineDetail(machine)}
+        <div class="dashboard">
+          ${renderDeviceSection()}
+          ${renderMachineDetail(machine)}
+        </div>
       </main>
     </div>
   `;
@@ -371,10 +596,27 @@ function renderDashboard() {
   if (machine) {
     bindMachineHandlers(machine);
   }
+
+  bindDeviceHandlers();
 }
 
 function renderMulti() {
   const sidebar = renderSidebar();
+  if (state.user.role !== 'admin' && !state.user.can_run_multi) {
+    app.innerHTML = `
+      <div class="app-shell">
+        ${sidebar}
+        <main class="main">
+          <div class="panel">
+            <h1>Массовое выполнение команд</h1>
+            <div class="notice warning">У вашего аккаунта нет разрешения на выполнение массовых команд.</div>
+          </div>
+        </main>
+      </div>
+    `;
+    bindSidebarHandlers();
+    return;
+  }
   const machineOptions = state.machines
     .map(
       (m) => `
@@ -445,20 +687,133 @@ function bindSidebarHandlers() {
     };
   });
 
-  qsa('.machine-card').forEach((el) => {
-    el.onclick = () => {
-      state.selectedMachineId = Number(el.dataset.id);
-      state.activeTab = 'overview';
-      navigate('#/dashboard');
-    };
-  });
-
   qs('[data-action="add-machine"]').onclick = () => openAddMachine();
   qs('[data-action="logout"]').onclick = async () => {
     await api('/api/auth/logout', { method: 'POST' });
     state.user = null;
+    state.dataLoaded = false;
     navigate('#/login');
   };
+}
+
+function bindDeviceHandlers() {
+  qsa('.device-card').forEach((card) => {
+    card.onclick = () => {
+      state.selectedMachineId = Number(card.dataset.id);
+      state.activeTab = 'overview';
+      render();
+    };
+  });
+
+  qsa('[data-device-tab]').forEach((tab) => {
+    tab.onclick = () => {
+      state.deviceTab = tab.dataset.deviceTab;
+      state.activeTab = 'overview';
+      render();
+    };
+  });
+
+  qs('#device-search')?.addEventListener('input', (event) => {
+    state.searchQuery = event.target.value;
+    render();
+  });
+
+  qs('#group-filter')?.addEventListener('change', (event) => {
+    state.groupFilter = event.target.value;
+    render();
+  });
+
+  qs('#group-create')?.addEventListener('click', async () => {
+    const name = qs('#group-name')?.value.trim();
+    if (!name) return;
+    try {
+      await api('/api/groups', { method: 'POST', body: JSON.stringify({ name }) });
+      await refreshData();
+      state.groupFilter = 'all';
+      render();
+    } catch (err) {
+      alert(err.message || 'Ошибка создания группы');
+    }
+  });
+
+  qsa('[data-group-save]').forEach((btn) => {
+    btn.addEventListener('click', async (event) => {
+      event.stopPropagation();
+      const id = btn.dataset.groupSave;
+      const input = qs(`[data-group-edit="${id}"]`);
+      const name = input?.value.trim();
+      if (!name) return;
+      try {
+        await api(`/api/groups/${id}`, { method: 'PATCH', body: JSON.stringify({ name }) });
+        await refreshData();
+        render();
+      } catch (err) {
+        alert(err.message || 'Ошибка обновления группы');
+      }
+    });
+  });
+
+  qsa('[data-group-delete]').forEach((btn) => {
+    btn.addEventListener('click', async (event) => {
+      event.stopPropagation();
+      const id = btn.dataset.groupDelete;
+      if (!confirm('Удалить группу?')) return;
+      await api(`/api/groups/${id}`, { method: 'DELETE' });
+      await refreshData();
+      render();
+    });
+  });
+
+  qsa('[data-group-machine]').forEach((select) => {
+    select.addEventListener('click', (event) => event.stopPropagation());
+    select.addEventListener('change', async (event) => {
+      event.stopPropagation();
+      const machineId = Number(select.dataset.groupMachine);
+      const groupId = select.value || null;
+      await api(`/api/machines/${machineId}`, { method: 'PATCH', body: JSON.stringify({ group_id: groupId }) });
+      await refreshData();
+      render();
+    });
+  });
+
+  qs('[data-action="toggle-add"]')?.addEventListener('click', () => {
+    state.showAddMachine = !state.showAddMachine;
+    render();
+  });
+
+  qs('[data-action="refresh-status"]')?.addEventListener('click', async () => {
+    await loadStatuses();
+    render();
+  });
+
+  qs('#add-machine-cancel')?.addEventListener('click', () => {
+    state.showAddMachine = false;
+    render();
+  });
+
+  qs('#add-machine-submit')?.addEventListener('click', async () => {
+    const payload = {
+      name: qs('#add-name').value.trim(),
+      visibility: qs('#add-visibility').value,
+      group_id: qs('#add-group').value || null,
+      ssh_host: qs('#add-ssh-host').value.trim(),
+      ssh_port: Number(qs('#add-ssh-port').value),
+      ssh_username: qs('#add-ssh-user').value.trim(),
+      ssh_auth_type: qs('#add-auth-type').value,
+      ssh_password: qs('#add-password').value.trim(),
+      ssh_private_key: qs('#add-private-key').value.trim(),
+      ssh_passphrase: qs('#add-passphrase').value.trim(),
+      notes: qs('#add-notes').value.trim(),
+    };
+    if (!payload.name || !payload.ssh_host || !payload.ssh_username) {
+      alert('Заполните имя, SSH host и SSH username');
+      return;
+    }
+    await api('/api/machines', { method: 'POST', body: JSON.stringify(payload) });
+    state.showAddMachine = false;
+    await refreshData();
+    render();
+  });
 }
 
 function bindMachineHandlers(machine) {
@@ -494,45 +849,14 @@ function bindMachineHandlers(machine) {
 }
 
 async function openAddMachine() {
-  const name = prompt('Название машины');
-  if (!name) return;
-  const sshHost = prompt('SSH host (для reverse-туннеля обычно 127.0.0.1)') || '127.0.0.1';
-  const sshPort = Number(prompt('SSH port (например 2201)') || '22');
-  const sshUser = prompt('SSH username') || 'root';
-  const authType = prompt('auth: password или key', 'password') || 'password';
-  let sshPassword = '';
-  let sshPrivateKey = '';
-  let sshPassphrase = '';
-  if (authType === 'key') {
-    sshPrivateKey = prompt('Вставьте приватный ключ') || '';
-    sshPassphrase = prompt('Passphrase (если есть)') || '';
-  } else {
-    sshPassword = prompt('SSH пароль') || '';
-  }
-  const visibility = confirm('Сделать видимой для всех пользователей?') ? 'shared' : 'private';
-
-  await api('/api/machines', {
-    method: 'POST',
-    body: JSON.stringify({
-      name,
-      ssh_host: sshHost,
-      ssh_port: sshPort,
-      ssh_username: sshUser,
-      ssh_auth_type: authType,
-      ssh_password: sshPassword,
-      ssh_private_key: sshPrivateKey,
-      ssh_passphrase: sshPassphrase,
-      visibility,
-      notes: '',
-    }),
-  });
-  await loadMachines();
+  state.showAddMachine = true;
   render();
 }
 
 async function saveMachine(id) {
   const payload = {
     name: qs('#edit-name').value.trim(),
+    group_id: qs('#edit-group').value || null,
     ssh_host: qs('#edit-ssh-host').value.trim(),
     ssh_port: Number(qs('#edit-ssh-port').value),
     ssh_username: qs('#edit-ssh-user').value.trim(),
@@ -551,19 +875,20 @@ async function saveMachine(id) {
     method: 'PATCH',
     body: JSON.stringify(payload),
   });
-  await loadMachines();
+  await refreshData();
   render();
 }
 
 async function deleteMachine(id) {
   if (!confirm('Удалить машину?')) return;
   await api(`/api/machines/${id}`, { method: 'DELETE' });
-  await loadMachines();
+  await refreshData();
   state.selectedMachineId = state.machines[0]?.id || null;
   render();
 }
 
-async function loadServices(machineId) {
+async function loadServices(machineId, force = false) {
+  if (!force && state.services[machineId]) return;
   state.services[machineId] = await api(`/api/machines/${machineId}/services`);
 }
 
@@ -586,6 +911,14 @@ async function addServicePreset(machineId, presetId) {
       type: 'desktop',
       target_host: '127.0.0.1',
       target_port: 3000,
+      target_path: '/',
+      protocol: 'http',
+    },
+    'desktop-real': {
+      name: 'Desktop (Real GUI/noVNC)',
+      type: 'desktop',
+      target_host: '127.0.0.1',
+      target_port: 6080,
       target_path: '/',
       protocol: 'http',
     },
@@ -621,7 +954,7 @@ async function createService(machineId, payload) {
     method: 'POST',
     body: JSON.stringify(payload),
   });
-  await loadServices(machineId);
+  await loadServices(machineId, true);
   render();
 }
 
@@ -629,7 +962,7 @@ async function deleteService(id) {
   if (!confirm('Удалить сервис?')) return;
   await api(`/api/services/${id}`, { method: 'DELETE' });
   const machineId = state.selectedMachineId;
-  await loadServices(machineId);
+  await loadServices(machineId, true);
   render();
 }
 
@@ -644,7 +977,58 @@ function openService(serviceId) {
 async function initTerminal(machineId) {
   const terminalEl = qs('#terminal');
   if (!terminalEl) return;
-  terminalEl.innerHTML = '';
+  terminalEl.innerHTML = '<div class="small mono">Connecting...</div>';
+  terminalEl.style.minHeight = '420px';
+  const hasXterm = window.Terminal && window.FitAddon;
+  if (!hasXterm) {
+    terminalEl.innerHTML = `
+      <div class="small mono" style="margin-bottom:8px;">
+        xterm не загрузился. Использую упрощенный терминал.
+      </div>
+      <pre id="fallback-output" class="panel mono" style="height:320px; overflow:auto; white-space:pre-wrap;"></pre>
+      <input id="fallback-input" class="input mono" placeholder="Введите команду и нажмите Enter" />
+    `;
+
+    const output = qs('#fallback-output', terminalEl);
+    const input = qs('#fallback-input', terminalEl);
+
+    const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/ssh/${machineId}`);
+    ws.onopen = () => {
+      output.textContent += '[WS connected]\n';
+      ws.send(JSON.stringify({ type: 'init', cols: 120, rows: 30, term: 'dumb' }));
+    };
+    ws.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data);
+        if (msg.type === 'data') {
+          output.textContent += msg.data;
+        }
+        if (msg.type === 'status') {
+          output.textContent += `[${msg.data}]\n`;
+        }
+      } catch {
+        output.textContent += String(event.data);
+      }
+      output.scrollTop = output.scrollHeight;
+    };
+    ws.onerror = () => {
+      output.textContent += '\n[Ошибка подключения]\n';
+    };
+    ws.onclose = () => {
+      output.textContent += '\n[WS closed]\n';
+    };
+
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        const value = input.value;
+        ws.send(JSON.stringify({ type: 'data', data: (value || '') + '\r' }));
+        input.value = '';
+      }
+    });
+
+    return;
+  }
   const term = new window.Terminal({
     cursorBlink: true,
     fontFamily: 'JetBrains Mono, monospace',
@@ -663,7 +1047,7 @@ async function initTerminal(machineId) {
 
   ws.onopen = () => {
     term.writeln('[WS connected]');
-    ws.send(JSON.stringify({ type: 'init', cols: term.cols, rows: term.rows }));
+    ws.send(JSON.stringify({ type: 'init', cols: term.cols, rows: term.rows, term: 'xterm-256color' }));
   };
 
   ws.onmessage = (event) => {
@@ -714,7 +1098,7 @@ async function initSftp(machineId) {
           <td>${item.size || '-'}</td>
           <td>
             ${item.type === 'd' ? `<button class="button" data-action="enter" data-name="${item.name}">Открыть</button>` : ''}
-            <button class="button" data-action="download" data-name="${item.name}">Скачать</button>
+            ${item.type !== 'd' ? `<button class="button" data-action="download" data-name="${item.name}">Скачать</button>` : ''}
             <button class="button danger" data-action="delete" data-name="${item.name}">Удалить</button>
           </td>
         </tr>
@@ -733,7 +1117,13 @@ async function initSftp(machineId) {
     qsa('[data-action="download"]').forEach((btn) => {
       btn.onclick = () => {
         const target = path.replace(/\/$/, '') + '/' + btn.dataset.name;
-        window.open(`/api/sftp/download?machineId=${machineId}&path=${encodeURIComponent(target)}`);
+        const link = document.createElement('a');
+        link.href = `/api/sftp/download?machineId=${machineId}&path=${encodeURIComponent(target)}`;
+        link.target = '_blank';
+        link.rel = 'noopener';
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
       };
     });
 
@@ -765,11 +1155,16 @@ async function initSftp(machineId) {
     const formData = new FormData();
     formData.append('file', file);
     const path = pathInput.value || '/';
-    await fetch(`/api/sftp/upload?machineId=${machineId}&path=${encodeURIComponent(path)}`, {
+    const res = await fetch(`/api/sftp/upload?machineId=${machineId}&path=${encodeURIComponent(path)}`, {
       method: 'POST',
       body: formData,
       credentials: 'include',
     });
+    if (!res.ok) {
+      const msg = await res.text();
+      alert(msg || 'Ошибка загрузки');
+    }
+    event.target.value = '';
     refresh();
   };
 
@@ -783,10 +1178,16 @@ async function runMultiCommand() {
   const command = qs('#multi-command').value.trim();
   if (!selected.length || !command) return;
 
-  const result = await api('/api/ssh/exec', {
-    method: 'POST',
-    body: JSON.stringify({ machineIds: selected, command }),
-  });
+  let result;
+  try {
+    result = await api('/api/ssh/exec', {
+      method: 'POST',
+      body: JSON.stringify({ machineIds: selected, command }),
+    });
+  } catch (err) {
+    alert(err.message || 'Ошибка выполнения');
+    return;
+  }
 
   const output = result
     .map((item) => `# ${item.machine.name}\n${item.stdout || ''}${item.stderr ? '\nERR: ' + item.stderr : ''}\n`)
@@ -818,7 +1219,15 @@ async function loadAdminPanels() {
     <div class="label">Пользователи</div>
     <div class="grid">${users
       .map(
-        (u) => `<div class="panel"><strong>${u.email}</strong><div class="small">${u.role}</div><button class="button danger" data-user="${u.id}">Удалить</button></div>`
+        (u) => `<div class="panel">
+          <strong>${u.email}</strong>
+          <div class="small">${u.role}</div>
+          <label class="small" style="display:flex; gap:8px; align-items:center; margin:8px 0;">
+            <input type="checkbox" data-perm="${u.id}" ${u.can_run_multi ? 'checked' : ''} ${u.role === 'admin' ? 'disabled' : ''}/>
+            Разрешить мульти-команды
+          </label>
+          ${u.role === 'admin' ? '<div class="small">Администратора нельзя удалить.</div>' : `<button class="button danger" data-user="${u.id}">Удалить</button>`}
+        </div>`
       )
       .join('')}</div>
   `;
@@ -843,6 +1252,16 @@ async function loadAdminPanels() {
       loadAdminPanels();
     };
   });
+
+  qsa('[data-perm]').forEach((input) => {
+    input.onchange = async () => {
+      await api(`/api/admin/users/${input.dataset.perm}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ can_run_multi: input.checked }),
+      });
+      loadAdminPanels();
+    };
+  });
 }
 
 async function render() {
@@ -850,6 +1269,11 @@ async function render() {
 
   if (!state.user && !hash.startsWith('#/login') && !hash.startsWith('#/register')) {
     await loadMe();
+  }
+
+  if (state.user && (hash.startsWith('#/login') || hash.startsWith('#/register'))) {
+    navigate('#/dashboard');
+    return;
   }
 
   if (!state.user && (hash.startsWith('#/login') || hash.startsWith('#/register'))) {
@@ -862,7 +1286,9 @@ async function render() {
     return;
   }
 
+  await loadGroups();
   await loadMachines();
+  await loadStatuses();
 
   if (hash.startsWith('#/multi')) {
     renderMulti();

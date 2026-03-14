@@ -39,6 +39,12 @@ cp server/.env.example server/.env
 docker compose up -d --build
 ```
 
+### Важно про reverse SSH
+
+Если хаб запущен в Docker, то `127.0.0.1` внутри контейнера — это сам контейнер, а не VPS.
+Поэтому для доступа к reverse‑туннелям на VPS используем `network_mode: host` (Linux).
+Тогда в машинах можно оставлять `ssh_host=127.0.0.1` и нужный `ssh_port`.
+
 ## Reverse SSH‑туннели
 
 На каждой машине поднимается обратный туннель на VPS:

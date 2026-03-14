@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS users (
   email TEXT NOT NULL UNIQUE,
   password_hash TEXT NOT NULL,
   role TEXT NOT NULL DEFAULT 'user',
+  can_run_multi INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -36,6 +37,7 @@ CREATE TABLE IF NOT EXISTS machines (
   name TEXT NOT NULL,
   owner_id INTEGER NOT NULL,
   visibility TEXT NOT NULL DEFAULT 'private',
+  group_id INTEGER,
   ssh_host TEXT NOT NULL,
   ssh_port INTEGER NOT NULL DEFAULT 22,
   ssh_username TEXT NOT NULL,
@@ -45,6 +47,15 @@ CREATE TABLE IF NOT EXISTS machines (
   ssh_passphrase_enc TEXT,
   notes TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (owner_id) REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS groups (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  owner_id INTEGER NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(name, owner_id),
   FOREIGN KEY (owner_id) REFERENCES users(id)
 );
 
@@ -61,6 +72,16 @@ CREATE TABLE IF NOT EXISTS services (
   FOREIGN KEY (machine_id) REFERENCES machines(id)
 );
 `);
+
+function ensureColumn(table, column, ddl) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all().map((row) => row.name);
+  if (!cols.includes(column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+  }
+}
+
+ensureColumn('users', 'can_run_multi', 'can_run_multi INTEGER NOT NULL DEFAULT 0');
+ensureColumn('machines', 'group_id', 'group_id INTEGER');
 
 module.exports = db;
 

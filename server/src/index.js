@@ -8,6 +8,7 @@ const cookie = require('cookie');
 const multer = require('multer');
 const WebSocket = require('ws');
 const httpProxy = require('http-proxy');
+const net = require('net');
 
 const db = require('./db');
 const { encrypt } = require('./crypto');
@@ -34,12 +35,18 @@ const proxy = httpProxy.createProxyServer({ ws: true, xfwd: true });
 const upload = multer({ dest: path.join(__dirname, '..', 'tmp') });
 
 const WEB_DIR = path.join(__dirname, '..', '..', 'web');
+const XTERM_DIR = path.join(__dirname, '..', 'node_modules', 'xterm');
+const XTERM_FIT_DIR = path.join(__dirname, '..', 'node_modules', 'xterm-addon-fit');
 
 app.use(express.json({ limit: '2mb' }));
 app.use((req, _res, next) => {
   req.cookies = cookie.parse(req.headers.cookie || '');
   next();
 });
+
+app.use('/vendor/xterm', express.static(path.join(XTERM_DIR, 'lib')));
+app.use('/vendor/xterm', express.static(path.join(XTERM_DIR, 'css')));
+app.use('/vendor/xterm-addon-fit', express.static(path.join(XTERM_FIT_DIR, 'lib')));
 
 function ensureBootstrapAdmin() {
   const count = db.prepare('SELECT COUNT(*) as c FROM users').get();
@@ -62,6 +69,8 @@ function sanitizeMachine(row) {
     owner_id: row.owner_id,
     owner_email: row.owner_email,
     visibility: row.visibility,
+    group_id: row.group_id,
+    group_name: row.group_name || null,
     ssh_host: row.ssh_host,
     ssh_port: row.ssh_port,
     ssh_username: row.ssh_username,
@@ -79,11 +88,38 @@ function canAccessMachine(user, machine) {
 
 function fetchMachine(id) {
   return db.prepare(`
-    SELECT m.*, u.email as owner_email
+    SELECT m.*, u.email as owner_email, g.name as group_name
     FROM machines m
     JOIN users u ON u.id = m.owner_id
+    LEFT JOIN groups g ON g.id = m.group_id
     WHERE m.id = ?
   `).get(id);
+}
+
+function canUseGroup(user, groupId) {
+  if (!groupId) return true;
+  const group = db.prepare('SELECT * FROM groups WHERE id = ?').get(groupId);
+  if (!group) return false;
+  if (user.role === 'admin') return true;
+  return group.owner_id === user.id;
+}
+
+function checkPort(host, port, timeoutMs = 1500) {
+  return new Promise((resolve) => {
+    const socket = new net.Socket();
+    let done = false;
+    const finish = (ok) => {
+      if (done) return;
+      done = true;
+      socket.destroy();
+      resolve(ok);
+    };
+    socket.setTimeout(timeoutMs);
+    socket.once('connect', () => finish(true));
+    socket.once('timeout', () => finish(false));
+    socket.once('error', () => finish(false));
+    socket.connect(port, host);
+  });
 }
 
 app.post('/api/auth/register', async (req, res) => {
@@ -139,7 +175,7 @@ app.get('/api/me', authRequired, (req, res) => {
 });
 
 app.get('/api/admin/users', authRequired, adminOnly, (_req, res) => {
-  const users = db.prepare('SELECT id, email, role, created_at FROM users ORDER BY id DESC').all();
+  const users = db.prepare('SELECT id, email, role, can_run_multi, created_at FROM users ORDER BY id DESC').all();
   res.json(users);
 });
 
@@ -153,8 +189,21 @@ app.post('/api/admin/users', authRequired, adminOnly, async (req, res) => {
 
 app.delete('/api/admin/users/:id', authRequired, adminOnly, (req, res) => {
   const id = Number(req.params.id);
+  const target = db.prepare('SELECT id, role FROM users WHERE id = ?').get(id);
+  if (!target) return res.status(404).json({ error: 'Not found' });
+  if (target.role === 'admin') return res.status(400).json({ error: 'Cannot delete admin' });
   if (req.user.id === id) return res.status(400).json({ error: 'Cannot delete self' });
   db.prepare('DELETE FROM users WHERE id = ?').run(id);
+  res.json({ ok: true });
+});
+
+app.patch('/api/admin/users/:id', authRequired, adminOnly, (req, res) => {
+  const id = Number(req.params.id);
+  const target = db.prepare('SELECT id, role FROM users WHERE id = ?').get(id);
+  if (!target) return res.status(404).json({ error: 'Not found' });
+  if (target.role === 'admin') return res.status(400).json({ error: 'Cannot modify admin permissions' });
+  const canRunMulti = req.body?.can_run_multi ? 1 : 0;
+  db.prepare('UPDATE users SET can_run_multi = ? WHERE id = ?').run(canRunMulti, id);
   res.json({ ok: true });
 });
 
@@ -179,16 +228,18 @@ app.get('/api/machines', authRequired, (req, res) => {
   let rows;
   if (req.user.role === 'admin') {
     rows = db.prepare(`
-      SELECT m.*, u.email as owner_email
+      SELECT m.*, u.email as owner_email, g.name as group_name
       FROM machines m
       JOIN users u ON u.id = m.owner_id
+      LEFT JOIN groups g ON g.id = m.group_id
       ORDER BY m.id DESC
     `).all();
   } else {
     rows = db.prepare(`
-      SELECT m.*, u.email as owner_email
+      SELECT m.*, u.email as owner_email, g.name as group_name
       FROM machines m
       JOIN users u ON u.id = m.owner_id
+      LEFT JOIN groups g ON g.id = m.group_id
       WHERE m.owner_id = ? OR m.visibility = 'shared'
       ORDER BY m.id DESC
     `).all(req.user.id);
@@ -196,15 +247,76 @@ app.get('/api/machines', authRequired, (req, res) => {
   res.json(rows.map(sanitizeMachine));
 });
 
+app.get('/api/groups', authRequired, (req, res) => {
+  let rows;
+  if (req.user.role === 'admin') {
+    rows = db.prepare('SELECT * FROM groups ORDER BY name').all();
+  } else {
+    rows = db.prepare(`
+      SELECT g.*
+      FROM groups g
+      WHERE g.owner_id = ?
+      OR g.id IN (
+        SELECT DISTINCT group_id FROM machines WHERE visibility = 'shared' AND group_id IS NOT NULL
+      )
+      ORDER BY g.name
+    `).all(req.user.id);
+  }
+  res.json(rows);
+});
+
+app.post('/api/groups', authRequired, (req, res) => {
+  const name = String(req.body?.name || '').trim();
+  if (!name) return res.status(400).json({ error: 'Missing name' });
+  try {
+    const result = db.prepare('INSERT INTO groups (name, owner_id) VALUES (?, ?)').run(name, req.user.id);
+    res.json({ id: result.lastInsertRowid, name });
+  } catch (err) {
+    res.status(400).json({ error: 'Group already exists' });
+  }
+});
+
+app.patch('/api/groups/:id', authRequired, (req, res) => {
+  const id = Number(req.params.id);
+  const name = String(req.body?.name || '').trim();
+  if (!name) return res.status(400).json({ error: 'Missing name' });
+  const group = db.prepare('SELECT * FROM groups WHERE id = ?').get(id);
+  if (!group) return res.status(404).json({ error: 'Not found' });
+  if (req.user.role !== 'admin' && group.owner_id !== req.user.id) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  try {
+    db.prepare('UPDATE groups SET name = ? WHERE id = ?').run(name, id);
+    res.json({ ok: true });
+  } catch {
+    res.status(400).json({ error: 'Group already exists' });
+  }
+});
+
+app.delete('/api/groups/:id', authRequired, (req, res) => {
+  const id = Number(req.params.id);
+  const group = db.prepare('SELECT * FROM groups WHERE id = ?').get(id);
+  if (!group) return res.status(404).json({ error: 'Not found' });
+  if (req.user.role !== 'admin' && group.owner_id !== req.user.id) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  db.prepare('UPDATE machines SET group_id = NULL WHERE group_id = ?').run(id);
+  db.prepare('DELETE FROM groups WHERE id = ?').run(id);
+  res.json({ ok: true });
+});
+
 app.post('/api/machines', authRequired, (req, res) => {
   const payload = req.body || {};
   if (!payload.name || !payload.ssh_host || !payload.ssh_username) {
     return res.status(400).json({ error: 'Missing fields' });
   }
+  if (!canUseGroup(req.user, payload.group_id)) {
+    return res.status(400).json({ error: 'Invalid group' });
+  }
 
   const stmt = db.prepare(`
     INSERT INTO machines (
-      name, owner_id, visibility, ssh_host, ssh_port, ssh_username,
+      name, owner_id, visibility, group_id, ssh_host, ssh_port, ssh_username,
       ssh_auth_type, ssh_password_enc, ssh_private_key_enc, ssh_passphrase_enc, notes
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
@@ -213,6 +325,7 @@ app.post('/api/machines', authRequired, (req, res) => {
     payload.name,
     req.user.id,
     payload.visibility || 'private',
+    payload.group_id || null,
     payload.ssh_host,
     Number(payload.ssh_port || 22),
     payload.ssh_username,
@@ -235,10 +348,14 @@ app.patch('/api/machines/:id', authRequired, (req, res) => {
   }
 
   const payload = req.body || {};
+  if (!canUseGroup(req.user, payload.group_id)) {
+    return res.status(400).json({ error: 'Invalid group' });
+  }
   db.prepare(`
     UPDATE machines SET
       name = ?,
       visibility = ?,
+      group_id = ?,
       ssh_host = ?,
       ssh_port = ?,
       ssh_username = ?,
@@ -251,6 +368,7 @@ app.patch('/api/machines/:id', authRequired, (req, res) => {
   `).run(
     payload.name || machine.name,
     payload.visibility || machine.visibility,
+    payload.group_id === undefined ? machine.group_id : payload.group_id,
     payload.ssh_host || machine.ssh_host,
     Number(payload.ssh_port || machine.ssh_port),
     payload.ssh_username || machine.ssh_username,
@@ -324,6 +442,9 @@ app.delete('/api/services/:id', authRequired, (req, res) => {
 });
 
 app.post('/api/ssh/exec', authRequired, async (req, res) => {
+  if (req.user.role !== 'admin' && !req.user.can_run_multi) {
+    return res.status(403).json({ error: 'Permission denied' });
+  }
   const { machineIds, command } = req.body || {};
   if (!Array.isArray(machineIds) || !command) {
     return res.status(400).json({ error: 'Missing fields' });
@@ -366,6 +487,9 @@ app.get('/api/sftp/download', authRequired, async (req, res) => {
     return res.status(404).json({ error: 'Not found' });
   }
   try {
+    const filename = path.basename(remotePath);
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Type', 'application/octet-stream');
     await withSftp(machine, (sftp) => sftp.get(remotePath, res));
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -379,13 +503,20 @@ app.post('/api/sftp/upload', authRequired, upload.single('file'), async (req, re
   if (!machine || !canAccessMachine(req.user, machine)) {
     return res.status(404).json({ error: 'Not found' });
   }
+  if (!req.file) return res.status(400).json({ error: 'Missing file' });
   const localPath = req.file.path;
-  const remotePath = remoteDir.replace(/\/$/, '') + '/' + req.file.originalname;
+  const normalizedDir = remoteDir.trim() || '/';
+  const remotePath = path.posix.join(normalizedDir, req.file.originalname);
   try {
-    await withSftp(machine, (sftp) => sftp.put(localPath, remotePath));
+    await withSftp(machine, (sftp) => sftp.put(localPath, remotePath, { flags: 'w' }));
     fs.unlinkSync(localPath);
     res.json({ ok: true });
   } catch (err) {
+    try {
+      fs.unlinkSync(localPath);
+    } catch {
+      // ignore
+    }
     res.status(500).json({ error: err.message });
   }
 });
@@ -403,6 +534,24 @@ app.delete('/api/sftp/delete', authRequired, async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+app.get('/api/machines/status', authRequired, async (req, res) => {
+  const ids = String(req.query.ids || '')
+    .split(',')
+    .map((val) => Number(val))
+    .filter((val) => Number.isFinite(val));
+  const results = await Promise.all(
+    ids.map(async (id) => {
+      const machine = fetchMachine(id);
+      if (!machine || !canAccessMachine(req.user, machine)) {
+        return { id, online: false };
+      }
+      const online = await checkPort(machine.ssh_host, machine.ssh_port);
+      return { id, online };
+    })
+  );
+  res.json(results);
 });
 
 app.use('/proxy/:serviceId', authRequired, (req, res) => {
@@ -484,20 +633,52 @@ wss.on('connection', (ws, req) => {
     return;
   }
 
+  console.log(`WS SSH connect user=${user.email} machine=${machineId}`);
   const conn = new Client();
   let shell;
-  let init = { cols: 120, rows: 30 };
+  let init = { cols: 120, rows: 30, term: 'xterm-256color' };
+  let connReady = false;
+  let initReady = false;
   const sendStatus = (message) => {
     if (ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'status', data: message }));
     }
   };
 
+  const openShellIfReady = () => {
+    if (!connReady || !initReady || shell) return;
+    sendStatus('SSH connected. Opening shell...');
+    conn.shell(
+      {
+        term: init.term || 'xterm-256color',
+        cols: init.cols || 120,
+        rows: init.rows || 30,
+      },
+      (err, stream) => {
+        if (err) {
+          sendStatus(`Shell error: ${err.message}`);
+          return;
+        }
+        shell = stream;
+        stream.on('data', (chunk) => {
+          ws.send(JSON.stringify({ type: 'data', data: chunk.toString('utf8') }));
+        });
+        stream.on('close', () => {
+          sendStatus('Shell closed.');
+          ws.close();
+          conn.end();
+        });
+      }
+    );
+  };
+
   ws.on('message', (data) => {
     try {
       const msg = JSON.parse(data.toString());
       if (msg.type === 'init') {
-        init = { cols: msg.cols || 120, rows: msg.rows || 30 };
+        init = { cols: msg.cols || 120, rows: msg.rows || 30, term: msg.term || 'xterm-256color' };
+        initReady = true;
+        openShellIfReady();
       }
       if (msg.type === 'data' && shell) {
         shell.write(msg.data);
@@ -511,34 +692,18 @@ wss.on('connection', (ws, req) => {
   });
 
   ws.on('close', () => {
+    console.log(`WS SSH closed user=${user.email} machine=${machineId}`);
     conn.end();
   });
 
   conn.on('ready', () => {
-    sendStatus('SSH connected. Opening shell...');
-    conn.shell({
-      term: 'xterm-256color',
-      cols: init.cols,
-      rows: init.rows,
-    }, (err, stream) => {
-      if (err) {
-        sendStatus(`Shell error: ${err.message}`);
-        return;
-      }
-      shell = stream;
-      stream.on('data', (chunk) => {
-        ws.send(JSON.stringify({ type: 'data', data: chunk.toString('utf8') }));
-      });
-      stream.on('close', () => {
-        sendStatus('Shell closed.');
-        ws.close();
-        conn.end();
-      });
-    });
+    connReady = true;
+    openShellIfReady();
   });
 
   conn.on('error', (err) => {
     sendStatus(`SSH error: ${err.message}`);
+    console.log(`SSH error user=${user.email} machine=${machineId}: ${err.message}`);
     ws.close();
   });
 

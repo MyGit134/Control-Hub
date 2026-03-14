@@ -5,7 +5,7 @@ const db = require('./db');
 const TOKEN_NAME = 'auth_token';
 
 function signToken(user) {
-  const payload = { id: user.id, role: user.role, email: user.email };
+  const payload = { id: user.id, role: user.role, email: user.email, can_run_multi: user.can_run_multi || 0 };
   return jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '12h' });
 }
 
@@ -27,7 +27,7 @@ function clearAuthCookie(res) {
 }
 
 function getUserById(id) {
-  return db.prepare('SELECT id, email, role, created_at FROM users WHERE id = ?').get(id);
+  return db.prepare('SELECT id, email, role, can_run_multi, created_at FROM users WHERE id = ?').get(id);
 }
 
 function authRequired(req, res, next) {

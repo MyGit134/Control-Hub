@@ -7,8 +7,7 @@ services:
       dockerfile: server/Dockerfile
     env_file:
       - ./server/.env
-    ports:
-      - "8080:8080"
+    network_mode: host
     volumes:
       - hub-data:/app/server/data
       - hub-tmp:/app/server/tmp

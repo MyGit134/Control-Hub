@@ -6,6 +6,7 @@ services:
   desktop:
     image: lscr.io/linuxserver/webtop:latest
     container_name: rch-webtop
+    profiles: ["desktop-webtop"]
     environment:
       - PUID=1000
       - PGID=1000
@@ -20,6 +21,7 @@ services:
   mediamtx:
     image: bluenviron/mediamtx:latest
     container_name: rch-mediamtx
+    profiles: ["camera"]
     volumes:
       - ./mediamtx.yml:/mediamtx.yml:ro
     ports:
@@ -31,13 +33,23 @@ services:
   cam-mic-publisher:
     image: linuxserver/ffmpeg:latest
     container_name: rch-ffmpeg
+    profiles: ["camera"]
     depends_on:
       - mediamtx
-    devices:
-      - /dev/video0:/dev/video0
-      - /dev/snd:/dev/snd
+    privileged: true
     volumes:
+      - /dev:/dev
       - ./start-ffmpeg.sh:/start-ffmpeg.sh:ro
     command: sh /start-ffmpeg.sh
+    restart: unless-stopped
+
+  novnc:
+    image: ghcr.io/novnc/noVNC:latest
+    container_name: rch-novnc
+    profiles: ["desktop-real"]
+    network_mode: host
+    environment:
+      - VNC_SERVER=127.0.0.1:5900
+      - WEB_PORT=6080
     restart: unless-stopped
 
