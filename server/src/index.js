@@ -508,8 +508,10 @@ app.get('/api/sftp/download', authRequired, async (req, res) => {
     return res.status(404).json({ error: 'Not found' });
   }
   try {
-    const filename = path.basename(remotePath);
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    const filename = path.basename(remotePath) || 'download';
+    const safeName = filename.replace(/["\\]/g, '_');
+    const encoded = encodeURIComponent(filename);
+    res.setHeader('Content-Disposition', `attachment; filename="${safeName}"; filename*=UTF-8''${encoded}`);
     res.setHeader('Content-Type', 'application/octet-stream');
     await withSftp(machine, (sftp) => sftp.get(remotePath, res));
   } catch (err) {

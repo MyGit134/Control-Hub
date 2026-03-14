@@ -346,16 +346,24 @@ function renderTabContent(machine, isOwner) {
     const services = state.services[machine.id] || [];
     const cards = services
       .map(
-        (svc) => `
+        (svc) => {
+          const url = getServiceUrl(svc);
+          const isDesktopReal =
+            svc.type === 'desktop-real' || (svc.type === 'desktop' && Number(svc.target_port) === 6080);
+          const openButton = isDesktopReal
+            ? `<a class="button accent" href="${url}" target="_blank" rel="noopener">Открыть в новой вкладке</a>`
+            : `<button class="button" data-action="open-service" data-id="${svc.id}">Открыть</button>`;
+          return `
           <div class="service-card">
             <strong>${esc(svc.name)}</strong>
             <div class="small">${esc(svc.type)} · ${esc(svc.protocol)}://${esc(svc.target_host)}:${svc.target_port}${esc(
               svc.target_path
             )}</div>
-            <button class="button" data-action="open-service" data-id="${svc.id}">Открыть</button>
+            ${openButton}
             ${isOwner ? `<button class="button danger" data-action="delete-service" data-id="${svc.id}">Удалить</button>` : ''}
           </div>
-        `
+        `;
+        }
       )
       .join('');
 
@@ -949,7 +957,7 @@ async function addServicePreset(machineId, presetId) {
     },
     'desktop-real': {
       name: 'Desktop (Real GUI/noVNC)',
-      type: 'desktop',
+      type: 'desktop-real',
       target_host: '127.0.0.1',
       target_port: 6080,
       target_path: '/',
@@ -1005,6 +1013,16 @@ function openService(serviceId) {
   if (!frameWrap || !frame) return;
   frame.src = `/proxy/${serviceId}/`;
   frameWrap.style.display = 'block';
+}
+
+function getServiceUrl(service) {
+  if (!service) return '#';
+  const isNoVnc =
+    service.type === 'desktop-real' || (service.type === 'desktop' && Number(service.target_port) === 6080);
+  if (isNoVnc) {
+    return `/proxy/${service.id}/vnc.html?path=websockify&autoconnect=1&resize=remote`;
+  }
+  return `/proxy/${service.id}/`;
 }
 
 function cleanupTerminal() {
@@ -1141,6 +1159,33 @@ async function initSftp(machineId) {
   const body = qs('#sftp-body');
   const pathInput = qs('#sftp-path');
 
+  async function downloadFile(targetPath, fallbackName) {
+    try {
+      const res = await fetch(
+        `/api/sftp/download?machineId=${machineId}&path=${encodeURIComponent(targetPath)}`,
+        { credentials: 'include' }
+      );
+      if (!res.ok) {
+        const msg = await res.text();
+        throw new Error(msg || 'Ошибка скачивания');
+      }
+      const blob = await res.blob();
+      const header = res.headers.get('Content-Disposition') || '';
+      const match = header.match(/filename\\*=UTF-8''([^;]+)/i) || header.match(/filename=\"?([^\";]+)\"?/i);
+      const name = match ? decodeURIComponent(match[1]) : fallbackName || 'download';
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = name;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      alert(err.message || 'Ошибка скачивания');
+    }
+  }
+
   async function refresh() {
     const path = pathInput.value || '/';
     const data = await api(`/api/sftp/list?machineId=${machineId}&path=${encodeURIComponent(path)}`);
@@ -1181,14 +1226,9 @@ async function initSftp(machineId) {
 
     qsa('[data-action="download"]').forEach((btn) => {
       btn.onclick = () => {
-        const target = path.replace(/\/$/, '') + '/' + decodeURIComponent(btn.dataset.name || '');
-        const link = document.createElement('a');
-        link.href = `/api/sftp/download?machineId=${machineId}&path=${encodeURIComponent(target)}`;
-        link.target = '_blank';
-        link.rel = 'noopener';
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
+        const name = decodeURIComponent(btn.dataset.name || '');
+        const target = path.replace(/\/$/, '') + '/' + name;
+        downloadFile(target, name);
       };
     });
 
