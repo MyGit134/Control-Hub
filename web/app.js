@@ -17,6 +17,21 @@ const state = {
   terminalSession: null,
 };
 
+const TERM_OPTIONS = [
+  { value: 'xterm-256color', label: 'xterm-256color (рекомендуется)' },
+  { value: 'xterm', label: 'xterm' },
+  { value: 'linux', label: 'linux' },
+  { value: 'vt100', label: 'vt100' },
+  { value: 'dumb', label: 'dumb (минимум)' },
+];
+
+function renderTermOptions(selectedValue) {
+  const value = selectedValue || 'xterm-256color';
+  return TERM_OPTIONS.map(
+    (opt) => `<option value="${opt.value}" ${opt.value === value ? 'selected' : ''}>${opt.label}</option>`
+  ).join('');
+}
+
 function qs(selector, parent = document) {
   return parent.querySelector(selector);
 }
@@ -412,6 +427,9 @@ function renderMachineForm(machine) {
         <input class="input" id="edit-ssh-host" placeholder="SSH host" value="${esc(machine.ssh_host)}" />
         <input class="input" id="edit-ssh-port" placeholder="SSH port" value="${machine.ssh_port}" />
         <input class="input" id="edit-ssh-user" placeholder="SSH username" value="${esc(machine.ssh_username)}" />
+        <select class="input" id="edit-term">
+          ${renderTermOptions(machine.term_type)}
+        </select>
         <select class="input" id="edit-auth-type">
           <option value="password" ${machine.ssh_auth_type === 'password' ? 'selected' : ''}>Пароль</option>
           <option value="key" ${machine.ssh_auth_type === 'key' ? 'selected' : ''}>Приватный ключ</option>
@@ -593,6 +611,9 @@ function renderAddMachineForm() {
         <input class="input" id="add-ssh-host" placeholder="SSH host" value="127.0.0.1" />
         <input class="input" id="add-ssh-port" placeholder="SSH port" value="22" />
         <input class="input" id="add-ssh-user" placeholder="SSH username" value="root" />
+        <select class="input" id="add-term">
+          ${renderTermOptions('xterm-256color')}
+        </select>
         <select class="input" id="add-auth-type">
           <option value="password">Пароль</option>
           <option value="key">Приватный ключ</option>
@@ -837,6 +858,7 @@ function bindDeviceHandlers() {
       ssh_port: Number(qs('#add-ssh-port').value),
       ssh_username: qs('#add-ssh-user').value.trim(),
       ssh_auth_type: qs('#add-auth-type').value,
+      term_type: qs('#add-term').value,
       ssh_password: qs('#add-password').value.trim(),
       ssh_private_key: qs('#add-private-key').value.trim(),
       ssh_passphrase: qs('#add-passphrase').value.trim(),
@@ -863,7 +885,7 @@ function bindMachineHandlers(machine) {
   });
 
   if (state.activeTab === 'ssh') {
-    initTerminal(machine.id);
+    initTerminal(machine);
   }
 
   if (state.activeTab === 'sftp') {
@@ -902,6 +924,7 @@ async function saveMachine(id) {
     ssh_port: Number(qs('#edit-ssh-port').value),
     ssh_username: qs('#edit-ssh-user').value.trim(),
     ssh_auth_type: qs('#edit-auth-type').value,
+    term_type: qs('#edit-term').value,
     visibility: qs('#edit-visibility').value,
     notes: qs('#edit-notes').value,
   };
@@ -1023,7 +1046,7 @@ function getServiceUrl(service) {
     const wsPath = `proxy/${service.id}/websockify`;
     return `/proxy/${service.id}/vnc.html?path=${encodeURIComponent(
       wsPath
-    )}&autoconnect=1&resize=scale&quality=6&compression=0`;
+    )}&autoconnect=1&resize=remote`;
   }
   return `/proxy/${service.id}/`;
 }
@@ -1046,12 +1069,15 @@ function cleanupTerminal() {
   state.terminalSession = null;
 }
 
-async function initTerminal(machineId) {
+async function initTerminal(machine) {
   const terminalEl = qs('#terminal');
   if (!terminalEl) return;
   cleanupTerminal();
   terminalEl.innerHTML = '<div class="small mono">Connecting...</div>';
   terminalEl.style.minHeight = '420px';
+  const termType = machine?.term_type || 'xterm-256color';
+  const machineId = machine?.id;
+  if (!machineId) return;
   const hasXterm = window.Terminal && window.FitAddon;
   if (!hasXterm) {
     terminalEl.innerHTML = `
@@ -1068,7 +1094,7 @@ async function initTerminal(machineId) {
     const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/ssh/${machineId}`);
     ws.onopen = () => {
       output.textContent += '[WS connected]\n';
-      ws.send(JSON.stringify({ type: 'init', cols: 120, rows: 30, term: 'dumb' }));
+      ws.send(JSON.stringify({ type: 'init', cols: 120, rows: 30, term: termType || 'dumb' }));
     };
     ws.onmessage = (event) => {
       try {
@@ -1121,7 +1147,7 @@ async function initTerminal(machineId) {
 
   ws.onopen = () => {
     term.writeln('[WS connected]');
-    ws.send(JSON.stringify({ type: 'init', cols: term.cols, rows: term.rows, term: 'xterm-256color' }));
+    ws.send(JSON.stringify({ type: 'init', cols: term.cols, rows: term.rows, term: termType }));
   };
 
   ws.onmessage = (event) => {

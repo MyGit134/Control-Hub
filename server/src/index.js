@@ -9,6 +9,7 @@ const multer = require('multer');
 const WebSocket = require('ws');
 const httpProxy = require('http-proxy');
 const net = require('net');
+const { StringDecoder } = require('string_decoder');
 
 const db = require('./db');
 const { encrypt } = require('./crypto');
@@ -87,6 +88,7 @@ function sanitizeMachine(row) {
     ssh_port: row.ssh_port,
     ssh_username: row.ssh_username,
     ssh_auth_type: row.ssh_auth_type,
+    term_type: row.term_type || 'xterm-256color',
     notes: row.notes,
     created_at: row.created_at,
   };
@@ -338,8 +340,8 @@ app.post('/api/machines', authRequired, (req, res) => {
   const stmt = db.prepare(`
     INSERT INTO machines (
       name, owner_id, visibility, group_id, ssh_host, ssh_port, ssh_username,
-      ssh_auth_type, ssh_password_enc, ssh_private_key_enc, ssh_passphrase_enc, notes
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ssh_auth_type, ssh_password_enc, ssh_private_key_enc, ssh_passphrase_enc, term_type, notes
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   stmt.run(
@@ -354,6 +356,7 @@ app.post('/api/machines', authRequired, (req, res) => {
     encrypt(payload.ssh_password || ''),
     encrypt(payload.ssh_private_key || ''),
     encrypt(payload.ssh_passphrase || ''),
+    payload.term_type || 'xterm-256color',
     payload.notes || ''
   );
 
@@ -384,6 +387,7 @@ app.patch('/api/machines/:id', authRequired, (req, res) => {
       ssh_password_enc = COALESCE(?, ssh_password_enc),
       ssh_private_key_enc = COALESCE(?, ssh_private_key_enc),
       ssh_passphrase_enc = COALESCE(?, ssh_passphrase_enc),
+      term_type = ?,
       notes = ?
     WHERE id = ?
   `).run(
@@ -397,6 +401,7 @@ app.patch('/api/machines/:id', authRequired, (req, res) => {
     payload.ssh_password ? encrypt(payload.ssh_password) : null,
     payload.ssh_private_key ? encrypt(payload.ssh_private_key) : null,
     payload.ssh_passphrase ? encrypt(payload.ssh_passphrase) : null,
+    payload.term_type || machine.term_type || 'xterm-256color',
     payload.notes ?? machine.notes,
     id
   );
@@ -659,6 +664,7 @@ wss.on('connection', (ws, req) => {
   let init = { cols: 120, rows: 30, term: 'xterm-256color' };
   let connReady = false;
   let initReady = false;
+  const decoder = new StringDecoder('utf8');
   const sendStatus = (message) => {
     if (ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'status', data: message }));
@@ -681,9 +687,16 @@ wss.on('connection', (ws, req) => {
         }
         shell = stream;
         stream.on('data', (chunk) => {
-          ws.send(JSON.stringify({ type: 'data', data: chunk.toString('utf8') }));
+          const text = decoder.write(chunk);
+          if (text) {
+            ws.send(JSON.stringify({ type: 'data', data: text }));
+          }
         });
         stream.on('close', () => {
+          const rest = decoder.end();
+          if (rest) {
+            ws.send(JSON.stringify({ type: 'data', data: rest }));
+          }
           sendStatus('Shell closed.');
           ws.close();
           conn.end();

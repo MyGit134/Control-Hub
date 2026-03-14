@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS machines (
   ssh_password_enc TEXT,
   ssh_private_key_enc TEXT,
   ssh_passphrase_enc TEXT,
+  term_type TEXT NOT NULL DEFAULT 'xterm-256color',
   notes TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   FOREIGN KEY (owner_id) REFERENCES users(id)
@@ -82,6 +83,7 @@ function ensureColumn(table, column, ddl) {
 
 ensureColumn('users', 'can_run_multi', 'can_run_multi INTEGER NOT NULL DEFAULT 0');
 ensureColumn('machines', 'group_id', 'group_id INTEGER');
+ensureColumn('machines', 'term_type', "term_type TEXT NOT NULL DEFAULT 'xterm-256color'");
 
 module.exports = db;
 

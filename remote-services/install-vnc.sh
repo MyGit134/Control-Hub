@@ -77,7 +77,12 @@ setup_x11vnc() {
   user="$1"
   uid="$2"
   display="$3"
-  scale="${VNC_SCALE:-0.8}"
+  scale="${VNC_SCALE:-1.0}"
+  scale_arg=""
+  case "$scale" in
+    ""|1|1.0|100|100%) scale_arg="" ;;
+    *) scale_arg="-scale ${scale}" ;;
+  esac
 
   if ! command -v x11vnc >/dev/null 2>&1; then
     install_pkg x11vnc
@@ -113,7 +118,7 @@ Type=simple
 User=$user
 Environment=DISPLAY=${display:-:0}
 Environment=XAUTHORITY=${xauth}
-ExecStart=/usr/bin/x11vnc -display ${display:-:0} ${xauth:+-auth ${xauth}} -forever -shared -rfbport 5900 -nopw -noxdamage -nowf -xkb -ncache 10 -wait 20 -scale ${scale}
+ExecStart=/usr/bin/x11vnc -display ${display:-:0} ${xauth:+-auth ${xauth}} -forever -shared -rfbport 5900 -nopw -noxdamage -nowf -xkb -ncache 10 -wait 20 ${scale_arg}
 Restart=on-failure
 RestartSec=2
 
