@@ -1023,7 +1023,7 @@ function getServiceUrl(service) {
     const wsPath = `proxy/${service.id}/websockify`;
     return `/proxy/${service.id}/vnc.html?path=${encodeURIComponent(
       wsPath
-    )}&autoconnect=1&resize=remote&quality=6&compression=0`;
+    )}&autoconnect=1&resize=scale&quality=6&compression=0`;
   }
   return `/proxy/${service.id}/`;
 }
