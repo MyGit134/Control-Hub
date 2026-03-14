@@ -67,12 +67,24 @@ setup_x11vnc() {
     install_pkg x11vnc
   fi
 
-  xauth="/home/$user/.Xauthority"
-  if [ ! -f "$xauth" ] && [ -n "$uid" ] && [ -d "/run/user/$uid" ]; then
-    guess=$(ls /run/user/$uid/.mutter-Xwaylandauth.* 2>/dev/null | head -n1 || true)
-    if [ -n "$guess" ]; then
-      xauth="$guess"
-    fi
+  xauth=""
+  if [ -n "$uid" ] && [ -d "/run/user/$uid" ]; then
+    for candidate in \
+      "/run/user/$uid/gdm/Xauthority" \
+      "/run/user/$uid/gdm3/Xauthority" \
+      "/run/user/$uid/Xauthority" \
+      "/run/user/$uid/.Xauthority" \
+      "/run/user/$uid/.mutter-Xwaylandauth."* \
+      "/home/$user/.Xauthority"
+    do
+      if [ -f "$candidate" ]; then
+        xauth="$candidate"
+        break
+      fi
+    done
+  fi
+  if [ -z "$xauth" ] && [ -f "/home/$user/.Xauthority" ]; then
+    xauth="/home/$user/.Xauthority"
   fi
 
   cat >/etc/systemd/system/rch-x11vnc.service <<EOF
@@ -84,8 +96,8 @@ After=graphical.target
 Type=simple
 User=$user
 Environment=DISPLAY=${display:-:0}
-Environment=XAUTHORITY=$xauth
-ExecStart=/usr/bin/x11vnc -display ${display:-:0} -auth guess -forever -shared -rfbport 5900 -nopw -noxdamage -nowf -xkb
+Environment=XAUTHORITY=${xauth}
+ExecStart=/usr/bin/x11vnc -display ${display:-:0} ${xauth:+-auth ${xauth}} -forever -shared -rfbport 5900 -nopw -noxdamage -nowf -xkb
 Restart=on-failure
 RestartSec=2
 
