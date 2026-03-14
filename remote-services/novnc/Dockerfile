@@ -1,7 +1,7 @@
-﻿FROM debian:bookworm-slim
+FROM debian:bookworm-slim
 
 RUN apt-get update \
-  && apt-get install -y novnc websockify \
+  && apt-get install -y novnc websockify procps \
   && rm -rf /var/lib/apt/lists/*
 
 ENV VNC_SERVER=127.0.0.1:5900
