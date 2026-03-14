@@ -81,9 +81,13 @@ async function loadStatuses() {
 }
 
 async function refreshData() {
-  if (!state.dataLoaded) {
-    await refreshData();
+  await loadMe();
+  if (!state.user) {
+    state.dataLoaded = false;
+    return;
   }
+  await Promise.all([loadMachines(), loadGroups()]);
+  await loadStatuses();
   state.dataLoaded = true;
 }
 
@@ -809,10 +813,14 @@ function bindDeviceHandlers() {
       alert('Заполните имя, SSH host и SSH username');
       return;
     }
-    await api('/api/machines', { method: 'POST', body: JSON.stringify(payload) });
-    state.showAddMachine = false;
-    await refreshData();
-    render();
+    try {
+      await api('/api/machines', { method: 'POST', body: JSON.stringify(payload) });
+      state.showAddMachine = false;
+      await refreshData();
+      render();
+    } catch (err) {
+      alert(err.message || 'Ошибка создания машины');
+    }
   });
 }
 
