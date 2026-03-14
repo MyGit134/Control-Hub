@@ -1020,7 +1020,8 @@ function getServiceUrl(service) {
   const isNoVnc =
     service.type === 'desktop-real' || (service.type === 'desktop' && Number(service.target_port) === 6080);
   if (isNoVnc) {
-    return `/proxy/${service.id}/vnc.html?path=websockify&autoconnect=1&resize=remote`;
+    const wsPath = `/proxy/${service.id}/websockify`;
+    return `/proxy/${service.id}/vnc.html?path=${encodeURIComponent(wsPath)}&autoconnect=1&resize=remote`;
   }
   return `/proxy/${service.id}/`;
 }
