@@ -85,7 +85,7 @@ Type=simple
 User=$user
 Environment=DISPLAY=${display:-:0}
 Environment=XAUTHORITY=$xauth
-ExecStart=/usr/bin/x11vnc -display ${display:-:0} -auth guess -forever -shared -rfbport 5900 -nopw -noxdamage -nowf
+ExecStart=/usr/bin/x11vnc -display ${display:-:0} -auth guess -forever -shared -rfbport 5900 -nopw -noxdamage -nowf -xkb
 Restart=on-failure
 RestartSec=2
 
@@ -186,4 +186,8 @@ if [ "${SESSION_TYPE:-}" = "wayland" ]; then
 else
   echo "X11 session detected (or unknown). Installing x11vnc..."
   setup_x11vnc "$SESSION_USER" "$SESSION_UID" "$SESSION_DISPLAY"
+fi
+
+if command -v ss >/dev/null 2>&1; then
+  ss -tlnp | grep ':5900' || true
 fi

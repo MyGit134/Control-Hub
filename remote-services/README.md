@@ -52,6 +52,12 @@ sudo FORCE_VNC=wayvnc ./install-vnc.sh
 sudo FORCE_VNC=x11vnc ./install-vnc.sh
 ```
 
+После установки можно проверить порт:
+
+```bash
+ss -tlnp | grep 5900
+```
+
 ### Camera + Mic
 FFmpeg забирает видео из `/dev/video0` и аудио из ALSA `default`, публикует поток в MediaMTX:
 
