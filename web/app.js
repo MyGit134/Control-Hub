@@ -1108,7 +1108,8 @@ async function initTerminal(machine) {
   const termType = machine?.term_type || 'xterm-256color';
   const machineId = machine?.id;
   if (!machineId) return;
-  const hasXterm = window.Terminal && window.FitAddon;
+  const hasXterm = !!window.Terminal;
+  const hasFitAddon = !!(window.FitAddon && window.FitAddon.FitAddon);
   if (!hasXterm) {
     terminalEl.innerHTML = `
       <div class="small mono" style="margin-bottom:8px;">
@@ -1168,10 +1169,16 @@ async function initTerminal(machine) {
       foreground: '#f3f5f7',
     },
   });
-  const fitAddon = new window.FitAddon.FitAddon();
-  term.loadAddon(fitAddon);
+  const fitAddon = hasFitAddon ? new window.FitAddon.FitAddon() : null;
+  if (fitAddon) {
+    term.loadAddon(fitAddon);
+  } else {
+    notify('info', 'FitAddon не загружен, авто-подгонка размера отключена');
+  }
   term.open(terminalEl);
-  fitAddon.fit();
+  if (fitAddon) {
+    fitAddon.fit();
+  }
 
   const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/ssh/${machineId}`);
 
@@ -1207,7 +1214,9 @@ async function initTerminal(machine) {
   });
 
   const resizeHandler = () => {
-    fitAddon.fit();
+    if (fitAddon) {
+      fitAddon.fit();
+    }
     ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
   };
   window.addEventListener('resize', resizeHandler);
