@@ -49,6 +49,30 @@ function esc(value) {
     .replace(/'/g, '&#39;');
 }
 
+function ensureToastRoot() {
+  let root = document.getElementById('toast-root');
+  if (!root) {
+    root = document.createElement('div');
+    root.id = 'toast-root';
+    root.className = 'toast-root';
+    document.body.appendChild(root);
+  }
+  return root;
+}
+
+function notify(type, message, timeout = 3200) {
+  const root = ensureToastRoot();
+  const toast = document.createElement('div');
+  toast.className = `toast ${type || 'info'}`;
+  toast.textContent = message;
+  root.appendChild(toast);
+  requestAnimationFrame(() => toast.classList.add('show'));
+  setTimeout(() => {
+    toast.classList.remove('show');
+    toast.addEventListener('transitionend', () => toast.remove(), { once: true });
+  }, timeout);
+}
+
 async function api(path, options = {}) {
   const res = await fetch(path, {
     headers: {
@@ -208,7 +232,7 @@ function renderLogin() {
       await loadMachines();
       navigate('#/dashboard');
     } catch (err) {
-      alert(err.message);
+      notify('error', err.message || 'Ошибка входа');
     }
   };
 }
@@ -250,7 +274,7 @@ function renderRegister() {
       await loadMachines();
       navigate('#/dashboard');
     } catch (err) {
-      alert(err.message);
+      notify('error', err.message || 'Ошибка регистрации');
     }
   };
 }
@@ -789,8 +813,9 @@ function bindDeviceHandlers() {
       await refreshData();
       state.groupFilter = 'all';
       render();
+      notify('success', 'Группа создана');
     } catch (err) {
-      alert(err.message || 'Ошибка создания группы');
+      notify('error', err.message || 'Ошибка создания группы');
     }
   });
 
@@ -805,8 +830,9 @@ function bindDeviceHandlers() {
         await api(`/api/groups/${id}`, { method: 'PATCH', body: JSON.stringify({ name }) });
         await refreshData();
         render();
+        notify('success', 'Группа обновлена');
       } catch (err) {
-        alert(err.message || 'Ошибка обновления группы');
+        notify('error', err.message || 'Ошибка обновления группы');
       }
     });
   });
@@ -819,6 +845,7 @@ function bindDeviceHandlers() {
       await api(`/api/groups/${id}`, { method: 'DELETE' });
       await refreshData();
       render();
+      notify('success', 'Группа удалена');
     });
   });
 
@@ -865,7 +892,7 @@ function bindDeviceHandlers() {
       notes: qs('#add-notes').value.trim(),
     };
     if (!payload.name || !payload.ssh_host || !payload.ssh_username) {
-      alert('Заполните имя, SSH host и SSH username');
+      notify('error', 'Заполните имя, SSH host и SSH username');
       return;
     }
     try {
@@ -873,8 +900,9 @@ function bindDeviceHandlers() {
       state.showAddMachine = false;
       await refreshData();
       render();
+      notify('success', 'Машина создана');
     } catch (err) {
-      alert(err.message || 'Ошибка создания машины');
+      notify('error', err.message || 'Ошибка создания машины');
     }
   });
 }
@@ -941,6 +969,7 @@ async function saveMachine(id) {
   });
   await refreshData();
   render();
+  notify('success', 'Машина обновлена');
 }
 
 async function deleteMachine(id) {
@@ -949,6 +978,7 @@ async function deleteMachine(id) {
   await refreshData();
   state.selectedMachineId = state.machines[0]?.id || null;
   render();
+  notify('success', 'Машина удалена');
 }
 
 async function loadServices(machineId, force = false) {
@@ -1211,7 +1241,7 @@ async function initSftp(machineId) {
       link.remove();
       URL.revokeObjectURL(url);
     } catch (err) {
-      alert(err.message || 'Ошибка скачивания');
+      notify('error', err.message || 'Ошибка скачивания');
     }
   }
 
@@ -1296,7 +1326,7 @@ async function initSftp(machineId) {
     });
     if (!res.ok) {
       const msg = await res.text();
-      alert(msg || 'Ошибка загрузки');
+      notify('error', msg || 'Ошибка загрузки');
     }
     event.target.value = '';
     refresh();
@@ -1319,7 +1349,7 @@ async function runMultiCommand() {
       body: JSON.stringify({ machineIds: selected, command }),
     });
   } catch (err) {
-    alert(err.message || 'Ошибка выполнения');
+    notify('error', err.message || 'Ошибка выполнения');
     return;
   }
 
@@ -1328,6 +1358,7 @@ async function runMultiCommand() {
     .join('\n');
 
   qs('#multi-output').textContent = output;
+  notify('success', 'Команда выполнена');
 }
 
 async function loadAdminPanels() {
