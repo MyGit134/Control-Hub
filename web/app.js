@@ -200,6 +200,58 @@ function getAssignableGroups() {
   return state.groups.filter((g) => g.owner_id === state.user.id);
 }
 
+function getSelectedMachineFromVisible(visible) {
+  if (!visible.length) return null;
+  const current = visible.find((m) => m.id === state.selectedMachineId);
+  return current || visible[0];
+}
+
+function buildDeviceListHtml(visible) {
+  const grouped = groupByGroup(visible);
+  const groupBlocks = grouped
+    .map((group) => {
+      const cards = group.items
+        .map((m) => {
+          const status = state.statuses[m.id];
+          const statusClass = status === true ? 'online' : status === false ? 'offline' : 'unknown';
+          const statusLabel = status === true ? 'Online' : status === false ? 'Offline' : '...';
+          const canEditGroup = state.user.role === 'admin' || m.owner_id === state.user.id;
+          const assignable = getAssignableGroups();
+          const groupOptions = [
+            `<option value="">Без группы</option>`,
+            ...assignable.map(
+              (g) =>
+                `<option value="${g.id}" ${String(m.group_id) === String(g.id) ? 'selected' : ''}>${esc(g.name)}</option>`
+            ),
+          ].join('');
+          return `
+            <div class="device-card ${m.id === state.selectedMachineId ? 'active' : ''}" data-id="${m.id}">
+              <div class="device-head">
+                <strong>${esc(m.name)}</strong>
+                <span class="status ${statusClass}">${statusLabel}</span>
+              </div>
+              <div class="small mono">${esc(m.ssh_username)}@${esc(m.ssh_host)}:${m.ssh_port}</div>
+              <div class="small">${esc(m.owner_email || '')}</div>
+              ${
+                canEditGroup
+                  ? `<select class="input group-inline" data-group-machine="${m.id}">${groupOptions}</select>`
+                  : `<div class="small">Группа: ${esc(m.group_name || 'Без группы')}</div>`
+              }
+            </div>
+          `;
+        })
+        .join('');
+      return `
+        <div class="group-block">
+          <div class="group-title">${esc(group.name)}</div>
+          <div class="device-grid">${cards || '<div class="small">Нет устройств</div>'}</div>
+        </div>
+      `;
+    })
+    .join('');
+  return groupBlocks || '<div class="small">Нет устройств</div>';
+}
+
 function renderLogin() {
   app.innerHTML = `
     <div class="panel auth-card">
@@ -296,7 +348,7 @@ function renderSidebar() {
 
 function renderMachineDetail(machine) {
   if (!machine) {
-    return `<div class="panel">Выберите машину слева.</div>`;
+    return `<div class="panel" id="machine-detail">Выберите машину слева.</div>`;
   }
 
   const isOwner = state.user.role === 'admin' || machine.owner_id === state.user.id;
@@ -322,7 +374,7 @@ function renderMachineDetail(machine) {
     .join('');
 
   return `
-    <div class="panel">
+    <div class="panel" id="machine-detail">
       <div class="topbar">
         <div>
           <h1>${safeName}</h1>
@@ -511,7 +563,6 @@ function renderServiceForm() {
 
 function renderDeviceSection() {
   const visible = getVisibleMachines();
-  const grouped = groupByGroup(visible);
   const groupOptions = [
     `<option value="all" ${state.groupFilter === 'all' ? 'selected' : ''}>Все группы</option>`,
     `<option value="ungrouped" ${state.groupFilter === 'ungrouped' ? 'selected' : ''}>Без группы</option>`,
@@ -520,48 +571,6 @@ function renderDeviceSection() {
         `<option value="${g.id}" ${String(state.groupFilter) === String(g.id) ? 'selected' : ''}>${esc(g.name)}</option>`
     ),
   ].join('');
-
-  const groupBlocks = grouped
-    .map((group) => {
-      const cards = group.items
-        .map((m) => {
-          const status = state.statuses[m.id];
-          const statusClass = status === true ? 'online' : status === false ? 'offline' : 'unknown';
-          const statusLabel = status === true ? 'Online' : status === false ? 'Offline' : '...';
-          const canEditGroup = state.user.role === 'admin' || m.owner_id === state.user.id;
-          const assignable = getAssignableGroups();
-          const groupOptions = [
-            `<option value="">Без группы</option>`,
-            ...assignable.map(
-              (g) =>
-                `<option value="${g.id}" ${String(m.group_id) === String(g.id) ? 'selected' : ''}>${esc(g.name)}</option>`
-            ),
-          ].join('');
-          return `
-            <div class="device-card ${m.id === state.selectedMachineId ? 'active' : ''}" data-id="${m.id}">
-              <div class="device-head">
-                <strong>${esc(m.name)}</strong>
-                <span class="status ${statusClass}">${statusLabel}</span>
-              </div>
-              <div class="small mono">${esc(m.ssh_username)}@${esc(m.ssh_host)}:${m.ssh_port}</div>
-              <div class="small">${esc(m.owner_email || '')}</div>
-              ${
-                canEditGroup
-                  ? `<select class="input group-inline" data-group-machine="${m.id}">${groupOptions}</select>`
-                  : `<div class="small">Группа: ${esc(m.group_name || 'Без группы')}</div>`
-              }
-            </div>
-          `;
-        })
-        .join('');
-      return `
-        <div class="group-block">
-          <div class="group-title">${esc(group.name)}</div>
-          <div class="device-grid">${cards || '<div class="small">Нет устройств</div>'}</div>
-        </div>
-      `;
-    })
-    .join('');
 
   const manageableGroups =
     state.user.role === 'admin' ? state.groups : state.groups.filter((g) => g.owner_id === state.user.id);
@@ -606,8 +615,8 @@ function renderDeviceSection() {
         <div class="group-list">${groupRows || '<div class="small">Групп пока нет</div>'}</div>
       </div>
       ${state.showAddMachine ? renderAddMachineForm() : ''}
-      <div class="device-list">
-        ${groupBlocks || '<div class="small">Нет устройств</div>'}
+      <div class="device-list" id="device-list">
+        ${buildDeviceListHtml(visible)}
       </div>
     </div>
   `;
@@ -779,13 +788,7 @@ function bindSidebarHandlers() {
 }
 
 function bindDeviceHandlers() {
-  qsa('.device-card').forEach((card) => {
-    card.onclick = () => {
-      state.selectedMachineId = Number(card.dataset.id);
-      state.activeTab = 'overview';
-      render();
-    };
-  });
+  bindDeviceListHandlers();
 
   qsa('[data-device-tab]').forEach((tab) => {
     tab.onclick = () => {
@@ -795,17 +798,9 @@ function bindDeviceHandlers() {
     };
   });
 
-  qs('#device-search')?.addEventListener('input', async (event) => {
-    const input = event.target;
-    const cursor = input?.selectionStart ?? input?.value?.length ?? 0;
-    state.searchQuery = input.value;
-    await render();
-    const next = qs('#device-search');
-    if (next) {
-      next.focus();
-      const pos = Math.min(cursor, next.value.length);
-      next.setSelectionRange(pos, pos);
-    }
+  qs('#device-search')?.addEventListener('input', (event) => {
+    state.searchQuery = event.target.value;
+    updateDeviceList();
   });
 
   qs('#group-filter')?.addEventListener('change', (event) => {
@@ -857,18 +852,6 @@ function bindDeviceHandlers() {
     });
   });
 
-  qsa('[data-group-machine]').forEach((select) => {
-    select.addEventListener('click', (event) => event.stopPropagation());
-    select.addEventListener('change', async (event) => {
-      event.stopPropagation();
-      const machineId = Number(select.dataset.groupMachine);
-      const groupId = select.value || null;
-      await api(`/api/machines/${machineId}`, { method: 'PATCH', body: JSON.stringify({ group_id: groupId }) });
-      await refreshData();
-      render();
-    });
-  });
-
   qs('[data-action="toggle-add"]')?.addEventListener('click', () => {
     state.showAddMachine = !state.showAddMachine;
     render();
@@ -913,6 +896,51 @@ function bindDeviceHandlers() {
       notify('error', err.message || 'Ошибка создания машины');
     }
   });
+}
+
+function bindDeviceListHandlers() {
+  qsa('.device-card').forEach((card) => {
+    card.onclick = () => {
+      state.selectedMachineId = Number(card.dataset.id);
+      state.activeTab = 'overview';
+      render();
+    };
+  });
+
+  qsa('[data-group-machine]').forEach((select) => {
+    select.addEventListener('click', (event) => event.stopPropagation());
+    select.addEventListener('change', async (event) => {
+      event.stopPropagation();
+      const machineId = Number(select.dataset.groupMachine);
+      const groupId = select.value || null;
+      await api(`/api/machines/${machineId}`, { method: 'PATCH', body: JSON.stringify({ group_id: groupId }) });
+      await refreshData();
+      render();
+    });
+  });
+}
+
+function updateDeviceList() {
+  const visible = getVisibleMachines();
+  const selected = getSelectedMachineFromVisible(visible);
+  const selectedChanged = selected?.id !== state.selectedMachineId;
+  state.selectedMachineId = selected?.id || null;
+
+  const listEl = qs('#device-list');
+  if (listEl) {
+    listEl.innerHTML = buildDeviceListHtml(visible);
+  }
+  bindDeviceListHandlers();
+
+  if (selectedChanged) {
+    const detailEl = qs('#machine-detail');
+    if (detailEl) {
+      detailEl.outerHTML = renderMachineDetail(selected);
+      if (selected) {
+        bindMachineHandlers(selected);
+      }
+    }
+  }
 }
 
 function bindMachineHandlers(machine) {
