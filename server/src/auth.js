@@ -5,7 +5,13 @@ const db = require('./db');
 const TOKEN_NAME = 'auth_token';
 
 function signToken(user) {
-  const payload = { id: user.id, role: user.role, email: user.email, can_run_multi: user.can_run_multi || 0 };
+  const payload = {
+    id: user.id,
+    role: user.role,
+    email: user.email,
+    can_run_multi: user.can_run_multi || 0,
+    token_version: user.token_version || 0,
+  };
   return jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '12h' });
 }
 
@@ -31,7 +37,9 @@ function clearAuthCookie(res) {
 }
 
 function getUserById(id) {
-  return db.prepare('SELECT id, email, role, can_run_multi, created_at FROM users WHERE id = ?').get(id);
+  return db
+    .prepare('SELECT id, email, role, can_run_multi, token_version, created_at FROM users WHERE id = ?')
+    .get(id);
 }
 
 function authRequired(req, res, next) {
@@ -41,6 +49,9 @@ function authRequired(req, res, next) {
     const payload = verifyToken(token);
     const user = getUserById(payload.id);
     if (!user) return res.status(401).json({ error: 'Invalid session' });
+    if ((payload.token_version || 0) !== (user.token_version || 0)) {
+      return res.status(401).json({ error: 'Invalid session' });
+    }
     req.user = user;
     return next();
   } catch (err) {

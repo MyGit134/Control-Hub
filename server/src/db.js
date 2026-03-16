@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash TEXT NOT NULL,
   role TEXT NOT NULL DEFAULT 'user',
   can_run_multi INTEGER NOT NULL DEFAULT 0,
+  token_version INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -82,6 +83,7 @@ function ensureColumn(table, column, ddl) {
 }
 
 ensureColumn('users', 'can_run_multi', 'can_run_multi INTEGER NOT NULL DEFAULT 0');
+ensureColumn('users', 'token_version', 'token_version INTEGER NOT NULL DEFAULT 0');
 ensureColumn('machines', 'group_id', 'group_id INTEGER');
 ensureColumn('machines', 'term_type', "term_type TEXT NOT NULL DEFAULT 'xterm-256color'");
 

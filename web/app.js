@@ -795,9 +795,17 @@ function bindDeviceHandlers() {
     };
   });
 
-  qs('#device-search')?.addEventListener('input', (event) => {
-    state.searchQuery = event.target.value;
-    render();
+  qs('#device-search')?.addEventListener('input', async (event) => {
+    const input = event.target;
+    const cursor = input?.selectionStart ?? input?.value?.length ?? 0;
+    state.searchQuery = input.value;
+    await render();
+    const next = qs('#device-search');
+    if (next) {
+      next.focus();
+      const pos = Math.min(cursor, next.value.length);
+      next.setSelectionRange(pos, pos);
+    }
   });
 
   qs('#group-filter')?.addEventListener('change', (event) => {

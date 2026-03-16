@@ -168,7 +168,9 @@ app.post('/api/auth/register', async (req, res) => {
   });
   insert();
 
-  const user = db.prepare('SELECT id, email, role FROM users WHERE email = ?').get(email);
+  const user = db
+    .prepare('SELECT id, email, role, can_run_multi, token_version FROM users WHERE email = ?')
+    .get(email);
   const token = signToken(user);
   setAuthCookie(res, token);
   return res.json(user);
@@ -189,6 +191,15 @@ app.post('/api/auth/login', async (req, res) => {
 });
 
 app.post('/api/auth/logout', (req, res) => {
+  const token = req.cookies?.auth_token;
+  if (token) {
+    try {
+      const payload = verifyToken(token);
+      db.prepare('UPDATE users SET token_version = token_version + 1 WHERE id = ?').run(payload.id);
+    } catch {
+      // ignore invalid token on logout
+    }
+  }
   clearAuthCookie(res);
   res.json({ ok: true });
 });
@@ -608,7 +619,10 @@ function getUserFromRequest(req) {
     const token = cookies.auth_token;
     if (!token) return null;
     const payload = verifyToken(token);
-    return getUserById(payload.id);
+    const user = getUserById(payload.id);
+    if (!user) return null;
+    if ((payload.token_version || 0) !== (user.token_version || 0)) return null;
+    return user;
   } catch {
     return null;
   }
