@@ -441,6 +441,14 @@ function renderTabContent(machine, isOwner) {
           const url = getServiceUrl(svc);
           const isDesktopReal =
             svc.type === 'desktop-real' || (svc.type === 'desktop' && Number(svc.target_port) === 6080);
+          const isMic = svc.type === 'mic';
+          const mediaWidget = isMic
+            ? `<div class="media-widget">
+                <div class="small">Аудио (HLS)</div>
+                <audio controls src="/proxy/${svc.id}/index.m3u8"></audio>
+                <div class="small mono">/proxy/${svc.id}/index.m3u8</div>
+              </div>`
+            : '';
           const openButton = isDesktopReal
             ? `<a class="button accent" href="${url}" target="_blank" rel="noopener">Открыть в новой вкладке</a>`
             : `<button class="button" data-action="open-service" data-id="${svc.id}">Открыть</button>`;
@@ -450,6 +458,7 @@ function renderTabContent(machine, isOwner) {
             <div class="small">${esc(svc.type)} · ${esc(svc.protocol)}://${esc(svc.target_host)}:${svc.target_port}${esc(
               svc.target_path
             )}</div>
+            ${mediaWidget}
             ${openButton}
             ${isOwner ? `<button class="button danger" data-action="delete-service" data-id="${svc.id}">Удалить</button>` : ''}
           </div>
@@ -535,8 +544,9 @@ function renderServiceForm() {
       <div class="preset-bar" style="margin-bottom:12px;">
         <button class="button" data-preset="desktop">Desktop (Webtop)</button>
         <button class="button" data-preset="desktop-real">Desktop (Real GUI/noVNC)</button>
-        <button class="button" data-preset="camera-webrtc">Camera/Mic (WebRTC)</button>
-        <button class="button" data-preset="camera-hls">Camera/Mic (HLS)</button>
+        <button class="button" data-preset="camera-webrtc">Camera (WebRTC)</button>
+        <button class="button" data-preset="camera-hls">Camera (HLS Video)</button>
+        <button class="button" data-preset="mic-hls">Mic (HLS Audio)</button>
       </div>
       <div class="grid two">
         <input class="input" id="svc-name" placeholder="Название" />
@@ -1053,7 +1063,7 @@ async function addServicePreset(machineId, presetId) {
       protocol: 'http',
     },
     'camera-webrtc': {
-      name: 'Camera/Mic (WebRTC)',
+      name: 'Camera (WebRTC)',
       type: 'camera',
       target_host: '127.0.0.1',
       target_port: 8889,
@@ -1061,11 +1071,19 @@ async function addServicePreset(machineId, presetId) {
       protocol: 'http',
     },
     'camera-hls': {
-      name: 'Camera/Mic (HLS)',
+      name: 'Camera (HLS Video)',
       type: 'camera',
       target_host: '127.0.0.1',
       target_port: 8888,
       target_path: '/cam',
+      protocol: 'http',
+    },
+    'mic-hls': {
+      name: 'Mic (HLS Audio)',
+      type: 'mic',
+      target_host: '127.0.0.1',
+      target_port: 8888,
+      target_path: '/mic-aac',
       protocol: 'http',
     },
   };
